@@ -1,0 +1,19 @@
+{{ define "message" }}
+<div class="box">
+  <article class="media">
+    <div class="media-left"></div>
+    <div class="media-content" style="max-width: 100%">
+      <div class="content">
+        <p>
+          <strong>{{ .From.DisplayName }}</strong>
+          <small>@{{ .From.ID }}</small>
+          <small>{{ .SentAt.Format "3:04PM" }}</small>
+          <br />
+          {{ $content := getMessageMainContent . }}
+          {{ markdown $content }}
+        </p>
+      </div>
+    </div>
+  </article>
+</div>
+{{ end }}
