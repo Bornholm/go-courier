@@ -36,6 +36,7 @@ Interfaces message optionnelles :
 | Package | Plateforme | Pièces jointes | Type de canal | Mentions |
 |---------|-----------|---|---|---|
 | `provider/whatsapp` | WhatsApp (whatsmeow) | oui, notes vocales incluses | oui | oui |
+| `provider/signal` | Signal (daemon signal-cli, JSON-RPC) | oui, notes vocales incluses | oui | oui |
 | `provider/mail` | SMTP/IMAP | oui | oui | non |
 | `provider/rocket` | Rocket.Chat (DDP + REST) | oui | oui | oui |
 | `provider/discord` | Discord | oui | oui | oui |
