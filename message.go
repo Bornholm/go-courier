@@ -1,7 +1,7 @@
 package courier
 
 import (
-	"bytes"
+	"context"
 	"io"
 	"time"
 
@@ -25,26 +25,55 @@ type Message interface {
 	From() User
 	SentAt() time.Time
 	Parts() []MessagePart
-	ChannelID() ChannelID
+	Channel() Channel
 }
 
+// MessagePart is one piece of a message content. A message always carries a
+// main part, named PartMain, plus any number of additional parts such as
+// attachments.
+//
+// Reader takes a context because opening a part may hit the network: media
+// hosted by the messaging platform is only downloaded when the part is
+// actually read.
 type MessagePart interface {
 	Name() string
 	ContentType() string
-	Reader() (io.ReadCloser, error)
+	Reader(ctx context.Context) (io.ReadCloser, error)
+}
+
+// MentionedMessage is implemented by messages carrying explicit mentions of
+// other users. Use the Mentions helper rather than asserting directly.
+type MentionedMessage interface {
+	Message
+	Mentions() []Mention
+}
+
+// ThreadedMessage is implemented by messages replying to another one. Use the
+// InReplyTo helper rather than asserting directly.
+type ThreadedMessage interface {
+	Message
+	InReplyTo() MessageID
+}
+
+// Mention references a user explicitly named in a message.
+type Mention struct {
+	UserID      UserID
+	DisplayName string
 }
 
 type BaseMessage struct {
 	id        MessageID
-	channelID ChannelID
+	channel   Channel
 	from      User
 	parts     []MessagePart
 	sentAt    time.Time
+	mentions  []Mention
+	inReplyTo MessageID
 }
 
-// ChannelID implements Message.
-func (m *BaseMessage) ChannelID() ChannelID {
-	return m.channelID
+// Channel implements Message.
+func (m *BaseMessage) Channel() Channel {
+	return m.channel
 }
 
 // From implements Message.
@@ -67,17 +96,30 @@ func (m *BaseMessage) SentAt() time.Time {
 	return m.sentAt
 }
 
+// Mentions implements MentionedMessage.
+func (m *BaseMessage) Mentions() []Mention {
+	return m.mentions
+}
+
+// InReplyTo implements ThreadedMessage.
+func (m *BaseMessage) InReplyTo() MessageID {
+	return m.inReplyTo
+}
+
 type BaseMessageOptions struct {
-	SentAt time.Time
-	Parts  []MessagePart
+	SentAt    time.Time
+	Parts     []MessagePart
+	Mentions  []Mention
+	InReplyTo MessageID
 }
 
 type BaseMessageOptionFunc func(opts *BaseMessageOptions)
 
 func NewBaseMessageOptions(funcs ...BaseMessageOptionFunc) *BaseMessageOptions {
 	opts := &BaseMessageOptions{
-		SentAt: time.Now(),
-		Parts:  []MessagePart{},
+		SentAt:   time.Now(),
+		Parts:    []MessagePart{},
+		Mentions: []Mention{},
 	}
 	for _, fn := range funcs {
 		fn(opts)
@@ -85,29 +127,17 @@ func NewBaseMessageOptions(funcs ...BaseMessageOptionFunc) *BaseMessageOptions {
 	return opts
 }
 
-type mainPart string
-
-// ContentType implements MessagePart.
-func (t mainPart) ContentType() string {
-	return TextPlain
-}
-
-// Name implements MessagePart.
-func (t mainPart) Name() string {
-	return PartMain
-}
-
-// Reader implements MessagePart.
-func (t mainPart) Reader() (io.ReadCloser, error) {
-	reader := io.NopCloser(bytes.NewBufferString(string(t)))
-	return reader, nil
-}
-
-var _ MessagePart = mainPart("")
-
+// WithMessageMainPart sets the main, textual content of the message.
 func WithMessageMainPart(text string) BaseMessageOptionFunc {
+	return WithMessageMainPartOfType(text, TextPlain)
+}
+
+// WithMessageMainPartOfType sets the main content of the message with an
+// explicit content type, for providers able to carry markup such as HTML or
+// Markdown.
+func WithMessageMainPartOfType(text string, contentType string) BaseMessageOptionFunc {
 	return func(opts *BaseMessageOptions) {
-		opts.Parts = append(opts.Parts, mainPart(text))
+		opts.Parts = append(opts.Parts, NewMessagePart(PartMain, contentType, OpenerFromString(text)))
 	}
 }
 
@@ -123,23 +153,43 @@ func WithMessageSentAt(sentAt time.Time) BaseMessageOptionFunc {
 	}
 }
 
-func NewMessage(id MessageID, channelID ChannelID, from User, funcs ...BaseMessageOptionFunc) *BaseMessage {
-	opts := NewBaseMessageOptions(funcs...)
-	return &BaseMessage{
-		id:        id,
-		channelID: channelID,
-		from:      from,
-		parts:     opts.Parts,
-		sentAt:    opts.SentAt,
+// WithMessageMentions declares the users explicitly named in the message.
+func WithMessageMentions(mentions ...Mention) BaseMessageOptionFunc {
+	return func(opts *BaseMessageOptions) {
+		opts.Mentions = append(opts.Mentions, mentions...)
 	}
 }
 
-var _ Message = &BaseMessage{}
+// WithMessageInReplyTo declares the message this one replies to.
+func WithMessageInReplyTo(messageID MessageID) BaseMessageOptionFunc {
+	return func(opts *BaseMessageOptions) {
+		opts.InReplyTo = messageID
+	}
+}
+
+func NewMessage(id MessageID, channel Channel, from User, funcs ...BaseMessageOptionFunc) *BaseMessage {
+	opts := NewBaseMessageOptions(funcs...)
+	return &BaseMessage{
+		id:        id,
+		channel:   channel,
+		from:      from,
+		parts:     opts.Parts,
+		sentAt:    opts.SentAt,
+		mentions:  opts.Mentions,
+		inReplyTo: opts.InReplyTo,
+	}
+}
+
+var (
+	_ Message          = &BaseMessage{}
+	_ MentionedMessage = &BaseMessage{}
+	_ ThreadedMessage  = &BaseMessage{}
+)
 
 type BaseMessagePart struct {
 	name        string
 	contentType string
-	reader      io.ReadCloser
+	open        PartOpener
 }
 
 // Name implements MessagePart.
@@ -153,19 +203,66 @@ func (p *BaseMessagePart) ContentType() string {
 }
 
 // Reader implements MessagePart.
-func (p *BaseMessagePart) Reader() (io.ReadCloser, error) {
-	return p.reader, nil
+func (p *BaseMessagePart) Reader(ctx context.Context) (io.ReadCloser, error) {
+	if p.open == nil {
+		return nil, errors.WithStack(ErrNotFound)
+	}
+
+	reader, err := p.open(ctx)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return reader, nil
 }
 
-func NewMessagePart(name string, contentType string, reader io.ReadCloser) *BaseMessagePart {
+func NewMessagePart(name string, contentType string, open PartOpener) *BaseMessagePart {
 	return &BaseMessagePart{
 		name:        name,
 		contentType: contentType,
-		reader:      reader,
+		open:        open,
 	}
 }
 
 var _ MessagePart = &BaseMessagePart{}
+
+// Mentions returns the users explicitly named in the message, or nil when the
+// provider does not support mentions.
+func Mentions(message Message) []Mention {
+	mentioned, ok := message.(MentionedMessage)
+	if !ok {
+		return nil
+	}
+
+	return mentioned.Mentions()
+}
+
+// IsMentioned reports whether the given user is explicitly named in the
+// message.
+func IsMentioned(message Message, userID UserID) bool {
+	for _, m := range Mentions(message) {
+		if m.UserID == userID {
+			return true
+		}
+	}
+
+	return false
+}
+
+// InReplyTo returns the message this one replies to, if any.
+func InReplyTo(message Message) (MessageID, bool) {
+	threaded, ok := message.(ThreadedMessage)
+	if !ok {
+		return "", false
+	}
+
+	parent := threaded.InReplyTo()
+	if parent == "" {
+		return "", false
+	}
+
+	return parent, true
+}
 
 func GetMessageMainPart(message Message) (MessagePart, error) {
 	for _, p := range message.Parts() {
@@ -179,20 +276,13 @@ func GetMessageMainPart(message Message) (MessagePart, error) {
 	return nil, errors.WithStack(ErrNotFound)
 }
 
-func GetMessageMainContent(message Message) (string, error) {
+func GetMessageMainContent(ctx context.Context, message Message) (string, error) {
 	main, err := GetMessageMainPart(message)
 	if err != nil {
 		return "", errors.WithStack(err)
 	}
 
-	reader, err := main.Reader()
-	if err != nil {
-		return "", errors.WithStack(err)
-	}
-
-	defer reader.Close()
-
-	data, err := io.ReadAll(reader)
+	data, err := ReadPart(ctx, main)
 	if err != nil {
 		return "", errors.WithStack(err)
 	}
@@ -200,20 +290,13 @@ func GetMessageMainContent(message Message) (string, error) {
 	return string(data), nil
 }
 
-func GetMessageContentByType(message Message, contentType string) ([]byte, error) {
+func GetMessageContentByType(ctx context.Context, message Message, contentType string) ([]byte, error) {
 	for _, p := range message.Parts() {
 		if p.ContentType() != contentType {
 			continue
 		}
 
-		reader, err := p.Reader()
-		if err != nil {
-			return nil, errors.WithStack(err)
-		}
-
-		defer reader.Close()
-
-		data, err := io.ReadAll(reader)
+		data, err := ReadPart(ctx, p)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
@@ -222,4 +305,21 @@ func GetMessageContentByType(message Message, contentType string) ([]byte, error
 	}
 
 	return nil, errors.WithStack(ErrNotFound)
+}
+
+// ReadPart reads a part content entirely, closing the underlying reader.
+func ReadPart(ctx context.Context, part MessagePart) ([]byte, error) {
+	reader, err := part.Reader(ctx)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	defer reader.Close()
+
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return data, nil
 }
