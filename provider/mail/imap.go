@@ -14,7 +14,6 @@ import (
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
 	"github.com/pkg/errors"
-	erp "github.com/web-ridge/email-reply-parser"
 	"gopkg.in/gomail.v2"
 )
 
@@ -29,77 +28,17 @@ func (p *Provider) checkMailbox(ctx context.Context, send chan courier.Message) 
 		}
 
 		for email := range emails {
-			thread, err := p.fetchMessageThread(ctx, f, email)
-			if err != nil {
-				slog.ErrorContext(ctx, "could not fetch email thread", slog.Any("error", errors.WithStack(err)))
-				continue
+			select {
+			case send <- p.toMessage(email):
+			case <-ctx.Done():
+				return errors.WithStack(ctx.Err())
 			}
-
-			send <- thread[0]
-
-			// if err := p.markAsUnseen(ctx, f, email.MessageID); err != nil {
-			// 	slog.ErrorContext(ctx, "could not mark email as unseen", slog.Any("error", errors.WithStack(err)))
-			// }
 		}
 
 		slog.DebugContext(ctx, "mailbox checked", slog.String("folder", f))
 	}
 
 	return nil
-}
-
-func (p *Provider) fetchMessageThread(ctx context.Context, mailbox string, email *parsemail.Email) ([]courier.Message, error) {
-	mailboxes, err := p.fetchMailboxes()
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	if !slices.Contains(mailboxes, mailbox) {
-		mailboxes = append([]string{mailbox}, mailboxes...)
-	}
-
-	messages := make([]courier.Message, 0, 1)
-
-	for {
-		alreadyFetched := slices.ContainsFunc(messages, func(m courier.Message) bool {
-			return m.ID() == courier.MessageID(email.MessageID)
-		})
-		if alreadyFetched {
-			break
-		}
-
-		reply := erp.Parse(email.TextBody)
-
-		message := courier.NewMessage(
-			courier.MessageID(email.MessageID),
-			courier.ChannelID(email.MessageID),
-			courier.NewUser(courier.UserID(email.From[0].Address), email.From[0].Name),
-			courier.WithMessageSentAt(email.Date),
-			courier.WithMessageMainPart(reply),
-		)
-
-		messages = append(messages, message)
-
-		if len(email.InReplyTo) == 0 {
-			break
-		}
-
-		for _, mb := range mailboxes {
-			prev, err := p.fetchEmailByMessageID(ctx, mb, email.InReplyTo[0])
-			if err != nil {
-				if errors.Is(err, ErrNotFound) {
-					continue
-				}
-
-				return nil, errors.Wrapf(err, "could not fetch email '%s'", email.InReplyTo[0])
-			}
-
-			email = prev
-			break
-		}
-	}
-
-	return messages, nil
 }
 
 func (p *Provider) fetchMailboxes() ([]string, error) {
@@ -332,6 +271,37 @@ func (p *Provider) getImapClient() (*imapclient.Client, error) {
 	}
 
 	return client, nil
+}
+
+// findSourceEmail locates the email a reply answers. The message points at
+// its parent through InReplyTo; failing that, the channel identifier is the
+// root of the thread, which is still a valid target.
+func (p *Provider) findSourceEmail(ctx context.Context, message courier.Message) (*parsemail.Email, error) {
+	if parent, ok := courier.InReplyTo(message); ok {
+		email, err := p.findEmailByMessageID(ctx, string(parent))
+		if err == nil {
+			return email, nil
+		}
+
+		if !errors.Is(err, ErrNotFound) {
+			return nil, errors.WithStack(err)
+		}
+
+		slog.DebugContext(ctx, "could not find parent email, falling back on thread root",
+			slog.String("messageID", string(parent)))
+	}
+
+	channel := message.Channel()
+	if channel == nil {
+		return nil, errors.WithStack(ErrNotFound)
+	}
+
+	email, err := p.findEmailByMessageID(ctx, string(channel.ChannelID()))
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return email, nil
 }
 
 func (p *Provider) findEmailByMessageID(ctx context.Context, messageID string) (*parsemail.Email, error) {

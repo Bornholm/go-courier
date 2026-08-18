@@ -1,10 +1,17 @@
 package mail
 
-import "time"
+import (
+	"time"
+
+	"github.com/bornholm/go-courier"
+)
 
 type Options struct {
 	SMTP SMTP
 	IMAP IMAP
+	// MaxInMemorySize is the size above which attachment content is spilled
+	// to a temporary file rather than kept in memory.
+	MaxInMemorySize int64
 }
 
 type OptionFunc func(opts *Options)
@@ -38,6 +45,12 @@ func WithSMTP(address string, issuer string, username, password string) OptionFu
 	}
 }
 
+func WithMaxInMemorySize(size int64) OptionFunc {
+	return func(opts *Options) {
+		opts.MaxInMemorySize = size
+	}
+}
+
 func NewOptions(funcs ...OptionFunc) *Options {
 	opts := &Options{
 		SMTP: SMTP{},
@@ -45,6 +58,7 @@ func NewOptions(funcs ...OptionFunc) *Options {
 			CheckInterval: time.Minute,
 			Folders:       []string{"INBOX"},
 		},
+		MaxInMemorySize: courier.DefaultMaxInMemorySize,
 	}
 	for _, fn := range funcs {
 		fn(opts)
