@@ -3,65 +3,93 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
+	"syscall"
 
 	"github.com/bornholm/go-courier"
 	"github.com/bornholm/go-courier/provider/discord"
 	"github.com/pkg/errors"
-	"github.com/rs/xid"
 )
 
 func main() {
-	botToken := os.Getenv("DISCORD_BOT_TOKEN")
+	slog.SetLogLoggerLevel(slog.LevelInfo)
 
-	provider := discord.NewProvider("Bot " + botToken)
-
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+
+	botToken := os.Getenv("DISCORD_BOT_TOKEN")
+	if botToken == "" {
+		slog.ErrorContext(ctx, "DISCORD_BOT_TOKEN is not set")
+		os.Exit(1)
+	}
+
+	provider := discord.NewProvider(discord.WithToken("Bot " + botToken))
 
 	messages, err := provider.Listen(ctx)
 	if err != nil {
-		log.Fatalf("[ERROR] %+v", errors.WithStack(err))
-		return
+		slog.ErrorContext(ctx, "could not listen", slog.Any("error", errors.WithStack(err)))
+		os.Exit(1)
 	}
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt)
+	self, err := provider.Self(ctx)
+	if err != nil {
+		slog.ErrorContext(ctx, "could not resolve self", slog.Any("error", errors.WithStack(err)))
+		os.Exit(1)
+	}
 
-	log.Println("Ctrl+C to exit")
-
-	courierUser := courier.NewUser("gocourier", "GoCourier")
+	slog.InfoContext(ctx, "listening, Ctrl+C to exit", slog.String("self", string(self.ID())))
 
 	for {
 		select {
-		case m, ok := <-messages:
+		case message, ok := <-messages:
 			if !ok {
 				return
 			}
 
-			mainContent, err := courier.GetMessageMainContent(m)
-			if err != nil {
-				log.Printf("[ERROR] %+v", errors.WithStack(err))
-				continue
+			if err := handle(ctx, provider, self, message); err != nil {
+				slog.ErrorContext(ctx, "could not handle message", slog.Any("error", errors.WithStack(err)))
 			}
 
-			messageID := courier.MessageID(xid.New().String())
-
-			text := fmt.Sprintf("You've just sent: '%s'", mainContent)
-
-			response := courier.NewMessage(messageID, m.ChannelID(), courierUser, courier.WithMessageMainPart(text))
-
-			if err := provider.Send(ctx, response); err != nil {
-				log.Printf("[ERROR] %+v", errors.WithStack(err))
-				continue
-			}
-
-			log.Printf("[MESSAGE] %s: %s", m.From().DisplayName(), mainContent)
-
-		case <-sig:
+		case <-ctx.Done():
 			return
 		}
 	}
+}
+
+func handle(ctx context.Context, provider courier.Provider, self courier.User, message courier.Message) error {
+	channel := message.Channel()
+
+	content, err := courier.GetMessageMainContent(ctx, message)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	slog.InfoContext(ctx, "received message",
+		slog.String("channel", string(channel.ChannelID())),
+		slog.String("channelKind", string(channel.Kind())),
+		slog.String("from", message.From().DisplayName()),
+		slog.String("content", content),
+		slog.Int("attachments", len(courier.Attachments(message))),
+	)
+
+	// Outside of a private conversation, only answer when addressed.
+	if courier.IsGroupChannel(channel) && !courier.IsMentioned(message, self.ID()) {
+		return nil
+	}
+
+	reply := courier.NewMessage(
+		courier.RandomMessageID(),
+		channel,
+		self,
+		courier.WithMessageMainPart(fmt.Sprintf("You've just sent: '%s'", content)),
+		courier.WithMessageInReplyTo(message.ID()),
+	)
+
+	if err := provider.Send(ctx, reply); err != nil {
+		return errors.WithStack(err)
+	}
+
+	return nil
 }
