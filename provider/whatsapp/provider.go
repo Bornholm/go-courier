@@ -183,7 +183,7 @@ func (p *Provider) toMessage(ctx context.Context, client *whatsmeow.Client, even
 	return courier.NewMessage(
 		courier.MessageID(event.Info.ID),
 		p.channelOf(ctx, client, chat),
-		courier.NewUser(courier.UserID(event.Info.MessageSource.Sender.String()), event.Info.PushName),
+		courier.NewUser(userIDOf(event.Info.MessageSource.Sender), event.Info.PushName),
 		funcs...,
 	)
 }
@@ -273,9 +273,20 @@ func (p *Provider) Self(ctx context.Context) (courier.User, error) {
 		return nil, errors.WithStack(courier.ErrNotFound)
 	}
 
-	jid := client.Store.ID.ToNonAD()
+	return courier.NewUser(userIDOf(*client.Store.ID), client.Store.PushName), nil
+}
 
-	return courier.NewUser(courier.UserID(jid.String()), client.Store.PushName), nil
+// userIDOf builds the stable identity of a WhatsApp user, stripping the
+// device part of the JID.
+//
+// WhatsApp addresses every linked device separately: the same person appears
+// as "<user>@lid" from their primary phone and as "<user>:22@lid" from their
+// 22nd linked device (WhatsApp Web, a second phone). Keeping that suffix
+// would make the identity depend on which device happened to send the
+// message, and any table keyed by user — an allow list, a mapping to an
+// account — would silently miss messages sent from anywhere else.
+func userIDOf(jid types.JID) courier.UserID {
+	return courier.UserID(jid.ToNonAD().String())
 }
 
 // Channel implements courier.ChannelResolver.

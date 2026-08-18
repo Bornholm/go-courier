@@ -153,3 +153,36 @@ func TestMediaTypeFor(t *testing.T) {
 		t.Errorf("mediaTypeFor(pdf): got %q, expected the document bucket", got)
 	}
 }
+
+// A message sent from a linked device carries the device in its JID
+// ("<user>:22@lid"). Two messages from the same person must still yield the
+// same user identity, whichever device they were sent from.
+func TestUserIDOfStripsTheDevice(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		jid      types.JID
+		expected courier.UserID
+	}{
+		{
+			name:     "linked device",
+			jid:      types.JID{User: "175913320902842", Device: 22, Server: types.HiddenUserServer},
+			expected: "175913320902842@lid",
+		},
+		{
+			name:     "primary device",
+			jid:      types.JID{User: "175913320902842", Server: types.HiddenUserServer},
+			expected: "175913320902842@lid",
+		},
+		{
+			name:     "phone number",
+			jid:      types.JID{User: "33600000000", Device: 3, Server: types.DefaultUserServer},
+			expected: "33600000000@s.whatsapp.net",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := userIDOf(test.jid); got != test.expected {
+				t.Errorf("userIDOf(%s) = %q, expected %q", test.jid, got, test.expected)
+			}
+		})
+	}
+}
