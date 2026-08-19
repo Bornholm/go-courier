@@ -26,6 +26,11 @@ type Provider struct {
 }
 
 // SetStatus implements courier.StatusProvider.
+//
+// Two events are emitted for the same intent: recent clients listen on
+// "user-activity", older ones on "typing". Sending both keeps the
+// indicator visible whatever the server version, and neither event is
+// worth failing on alone — a missing typing hint is cosmetic.
 func (p *Provider) SetStatus(ctx context.Context, status courier.Status, channelID courier.ChannelID) error {
 	client, err := p.getClient()
 	if err != nil {
@@ -34,13 +39,26 @@ func (p *Provider) SetStatus(ctx context.Context, status courier.Status, channel
 
 	typing := status == courier.StatusTyping
 
-	_, err = client.Call("stream-notify-room",
+	activities := []string{}
+	if typing {
+		activities = append(activities, "user-typing")
+	}
+
+	_, activityErr := client.Call("stream-notify-room",
+		fmt.Sprintf("%s/user-activity", channelID),
+		p.opts.Username,
+		activities,
+		map[string]any{},
+	)
+
+	_, typingErr := client.Call("stream-notify-room",
 		fmt.Sprintf("%s/typing", channelID),
 		p.opts.Username,
 		typing,
 	)
-	if err != nil {
-		return errors.WithStack(err)
+
+	if activityErr != nil && typingErr != nil {
+		return errors.WithStack(activityErr)
 	}
 
 	return nil
