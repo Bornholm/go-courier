@@ -472,3 +472,21 @@ func TestSendBeforeListen(t *testing.T) {
 		t.Error("provider.Send before Listen: got no error, expected one")
 	}
 }
+
+// Without Self, an application cannot tell whether a group message is
+// addressed to it, and providers that stay silent about their identity are
+// rejected by such applications.
+func TestProviderSelf(t *testing.T) {
+	provider := rest.NewProvider(rest.WithSelf(courier.NewUser("assistant", "Assistant")))
+
+	self, err := provider.Self(context.Background())
+	if err != nil {
+		t.Fatalf("Self: %v", err)
+	}
+	if self.ID() != courier.UserID("assistant") {
+		t.Errorf("self id = %q, want assistant", self.ID())
+	}
+	if self.DisplayName() != "Assistant" {
+		t.Errorf("self display name = %q, want Assistant", self.DisplayName())
+	}
+}

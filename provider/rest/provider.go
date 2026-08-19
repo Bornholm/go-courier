@@ -91,6 +91,13 @@ func (p *Provider) Capabilities() []courier.Capability {
 	}
 }
 
+// Self implements courier.SelfProvider. The identity is configured rather
+// than discovered: there is no remote account behind this provider, only
+// the application that runs it.
+func (p *Provider) Self(ctx context.Context) (courier.User, error) {
+	return p.opts.Self, nil
+}
+
 func NewProvider(funcs ...OptionFunc) *Provider {
 	return &Provider{
 		opts: NewOptions(funcs...),
@@ -100,5 +107,6 @@ func NewProvider(funcs ...OptionFunc) *Provider {
 var (
 	_ courier.Provider           = &Provider{}
 	_ courier.ChannelResolver    = &Provider{}
+	_ courier.SelfProvider       = &Provider{}
 	_ courier.CapabilityProvider = &Provider{}
 )

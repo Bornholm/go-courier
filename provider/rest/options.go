@@ -40,6 +40,10 @@ type Options struct {
 	// CORSOrigins is the list of allowed origins. Empty disables CORS
 	// headers, "*" allows any origin.
 	CORSOrigins []string
+	// Self is the identity the provider speaks as. Applications rely on it
+	// to tell their own messages apart and to decide whether a group
+	// message mentions them.
+	Self courier.User
 }
 
 type OptionFunc func(opts *Options)
@@ -63,6 +67,7 @@ func NewOptions(funcs ...OptionFunc) *Options {
 		SubscriberBufferSize: 32,
 		IncomingBufferSize:   16,
 		CORSOrigins:          nil,
+		Self:                 courier.NewUser("self", "self"),
 	}
 	for _, fn := range funcs {
 		fn(opts)
@@ -107,6 +112,13 @@ func WithAnonymous(user courier.User) OptionFunc {
 	return WithAuthenticator(func(r *http.Request) (courier.User, error) {
 		return user, nil
 	})
+}
+
+// WithSelf sets the identity the provider speaks as.
+func WithSelf(user courier.User) OptionFunc {
+	return func(opts *Options) {
+		opts.Self = user
+	}
 }
 
 // WithChannelKind reports the same kind for every channel.
