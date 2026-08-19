@@ -403,10 +403,16 @@ func (p *Provider) getClient(ctx context.Context) (*whatsmeow.Client, error) {
 			}
 
 			for evt := range qrChan {
-				if evt.Event == "code" {
+				switch {
+				case evt.Event == "code" && p.opts.QRHandler != nil:
+					p.opts.QRHandler(ctx, evt.Code, false)
+				case evt.Event == "code":
 					qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
-				} else {
-					slog.DebugContext(ctx, "whatsapp client logged in")
+				default:
+					slog.DebugContext(ctx, "whatsapp client logged in", slog.String("event", evt.Event))
+					if p.opts.QRHandler != nil {
+						p.opts.QRHandler(ctx, "", evt.Event == "success")
+					}
 				}
 			}
 		} else {
