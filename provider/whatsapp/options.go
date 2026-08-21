@@ -2,6 +2,7 @@ package whatsapp
 
 import (
 	"context"
+	"time"
 
 	"github.com/bornholm/go-courier"
 )
@@ -27,6 +28,14 @@ type Options struct {
 	// the codes are printed to standard output as half-block QR codes — the
 	// historical behaviour, which suits a terminal but not a web UI.
 	QRHandler QRHandler
+	// DisappearingTimer is the fallback lifetime marked on outgoing messages
+	// in chats whose own setting is not known yet. Zero — the default —
+	// sends plain, permanent messages: a bot must never turn a regular
+	// conversation into a disappearing one behind the user's back.
+	//
+	// Once a message has been received from a chat, that chat's own setting
+	// always wins over this value.
+	DisappearingTimer time.Duration
 }
 
 type OptionFunc func(opts *Options)
@@ -67,5 +76,14 @@ func WithMaxInMemorySize(size int64) OptionFunc {
 func WithQRHandler(handler QRHandler) OptionFunc {
 	return func(opts *Options) {
 		opts.QRHandler = handler
+	}
+}
+
+// WithDisappearingTimer sets the lifetime marked on outgoing messages sent to
+// a chat whose own disappearing-messages setting has not been observed yet.
+// The zero value, which is the default, marks no expiry at all.
+func WithDisappearingTimer(timer time.Duration) OptionFunc {
+	return func(opts *Options) {
+		opts.DisappearingTimer = timer
 	}
 }

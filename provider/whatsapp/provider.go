@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"os"
 	"sync"
-	"time"
 
 	"github.com/bornholm/go-courier"
 	"github.com/bornholm/go-courier/syncx"
@@ -41,6 +40,10 @@ type Provider struct {
 
 	// groupNames caches group names, since resolving one is a network call.
 	groupNames syncx.Map[types.JID, string]
+
+	// expirations remembers the disappearing-messages setting observed on
+	// each chat, so that replies mirror it instead of imposing one.
+	expirations syncx.Map[types.JID, uint32]
 
 	releaseMutex sync.Mutex
 	release      []courier.CloseFunc
@@ -115,6 +118,10 @@ func (p *Provider) Listen(ctx context.Context) (chan courier.Message, error) {
 		if !ok {
 			return
 		}
+
+		// Learned even from our own messages: the setting belongs to the
+		// chat, not to whoever happens to write in it.
+		p.rememberExpiration(event)
 
 		if event.Info.MessageSource.IsFromMe {
 			return
@@ -241,6 +248,8 @@ func (p *Provider) Send(ctx context.Context, message courier.Message) error {
 			return errors.WithStack(err)
 		}
 
+		p.applyExpiration(payload, to)
+
 		if _, err := client.SendMessage(ctx, to, payload); err != nil {
 			return errors.WithStack(err)
 		}
@@ -250,16 +259,52 @@ func (p *Provider) Send(ctx context.Context, message courier.Message) error {
 }
 
 func (p *Provider) sendText(ctx context.Context, client *whatsmeow.Client, to types.JID, content string) error {
-	_, err := client.SendMessage(ctx, to, &waE2E.Message{
+	payload := &waE2E.Message{
 		ExtendedTextMessage: &waE2E.ExtendedTextMessage{
-			ContextInfo: &waE2E.ContextInfo{
-				Expiration: proto.Uint32(uint32((24 * time.Hour).Seconds())),
-			},
 			Text: proto.String(content),
 		},
-	})
+	}
+	p.applyExpiration(payload, to)
+
+	_, err := client.SendMessage(ctx, to, payload)
 
 	return errors.WithStack(err)
+}
+
+// rememberExpiration records the disappearing-messages setting carried by an
+// incoming message, including its absence: a chat whose timer was turned off
+// must stop receiving expiring replies.
+func (p *Provider) rememberExpiration(event *events.Message) {
+	expiration := contextInfoOf(event.Message).GetExpiration()
+
+	// A message unwrapped from an EphemeralMessage always belongs to a
+	// disappearing chat, even when its context info says nothing.
+	if expiration == 0 && event.IsEphemeral {
+		return
+	}
+
+	p.expirations.Store(event.Info.MessageSource.Chat, expiration)
+}
+
+// applyExpiration marks an outgoing message with the lifetime of its chat, so
+// that a reply disappears exactly like what it answers — no more, no less.
+// Nothing is marked when the chat keeps its messages.
+func (p *Provider) applyExpiration(msg *waE2E.Message, to types.JID) {
+	expiration, known := p.expirations.Load(to)
+	if !known {
+		expiration = uint32(p.opts.DisappearingTimer.Seconds())
+	}
+
+	if expiration == 0 {
+		return
+	}
+
+	contextInfo := contextInfoFor(msg)
+	if contextInfo == nil {
+		return
+	}
+
+	contextInfo.Expiration = proto.Uint32(expiration)
 }
 
 // Self implements courier.SelfProvider.
@@ -481,6 +526,47 @@ func contextInfoOf(msg *waE2E.Message) *waE2E.ContextInfo {
 		return msg.GetDocumentMessage().GetContextInfo()
 	case msg.GetStickerMessage() != nil:
 		return msg.GetStickerMessage().GetContextInfo()
+	default:
+		return nil
+	}
+}
+
+// contextInfoFor returns the context info of an outgoing message, creating it
+// when the message type carries one but has none yet. It returns nil for the
+// types that have no context info at all.
+func contextInfoFor(msg *waE2E.Message) *waE2E.ContextInfo {
+	if msg == nil {
+		return nil
+	}
+
+	ensure := func(current *waE2E.ContextInfo, set func(*waE2E.ContextInfo)) *waE2E.ContextInfo {
+		if current == nil {
+			current = &waE2E.ContextInfo{}
+			set(current)
+		}
+
+		return current
+	}
+
+	switch {
+	case msg.GetExtendedTextMessage() != nil:
+		m := msg.GetExtendedTextMessage()
+		return ensure(m.GetContextInfo(), func(ci *waE2E.ContextInfo) { m.ContextInfo = ci })
+	case msg.GetImageMessage() != nil:
+		m := msg.GetImageMessage()
+		return ensure(m.GetContextInfo(), func(ci *waE2E.ContextInfo) { m.ContextInfo = ci })
+	case msg.GetAudioMessage() != nil:
+		m := msg.GetAudioMessage()
+		return ensure(m.GetContextInfo(), func(ci *waE2E.ContextInfo) { m.ContextInfo = ci })
+	case msg.GetVideoMessage() != nil:
+		m := msg.GetVideoMessage()
+		return ensure(m.GetContextInfo(), func(ci *waE2E.ContextInfo) { m.ContextInfo = ci })
+	case msg.GetDocumentMessage() != nil:
+		m := msg.GetDocumentMessage()
+		return ensure(m.GetContextInfo(), func(ci *waE2E.ContextInfo) { m.ContextInfo = ci })
+	case msg.GetStickerMessage() != nil:
+		m := msg.GetStickerMessage()
+		return ensure(m.GetContextInfo(), func(ci *waE2E.ContextInfo) { m.ContextInfo = ci })
 	default:
 		return nil
 	}
