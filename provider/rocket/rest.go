@@ -3,6 +3,7 @@ package rocket
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -21,6 +22,10 @@ type credentials struct {
 	userID    string
 	authToken string
 }
+
+// maxResponseBody bounds what is read back from the REST API: enough for an
+// upload result or an error payload, never a whole file.
+const maxResponseBody = 8 << 10
 
 type restClient struct {
 	baseURL *url.URL
@@ -100,10 +105,24 @@ func (c *restClient) download(ctx context.Context, path string) (io.ReadCloser, 
 
 // upload posts a file to a room through the REST API, since DDP cannot carry
 // file contents.
+//
+// Rocket.Chat takes it in two steps since the removal of rooms.upload: the
+// bytes are stored first, then a second call turns the stored file into a
+// message. Sending only the first half uploads a file nobody ever sees.
 func (c *restClient) upload(ctx context.Context, roomID courier.ChannelID, attachment courier.Attachment, description string) error {
-	content, err := courier.ReadPart(ctx, attachment)
+	fileID, err := c.uploadMedia(ctx, roomID, attachment)
 	if err != nil {
 		return errors.WithStack(err)
+	}
+
+	return errors.WithStack(c.confirmMedia(ctx, roomID, fileID, description))
+}
+
+// uploadMedia stores the file and returns the identifier Rocket.Chat gave it.
+func (c *restClient) uploadMedia(ctx context.Context, roomID courier.ChannelID, attachment courier.Attachment) (string, error) {
+	content, err := courier.ReadPart(ctx, attachment)
+	if err != nil {
+		return "", errors.WithStack(err)
 	}
 
 	var body bytes.Buffer
@@ -116,39 +135,88 @@ func (c *restClient) upload(ctx context.Context, roomID courier.ChannelID, attac
 
 	part, err := writer.CreatePart(header)
 	if err != nil {
-		return errors.WithStack(err)
+		return "", errors.WithStack(err)
 	}
 
 	if _, err := part.Write(content); err != nil {
-		return errors.WithStack(err)
-	}
-
-	if description != "" {
-		if err := writer.WriteField("msg", description); err != nil {
-			return errors.WithStack(err)
-		}
+		return "", errors.WithStack(err)
 	}
 
 	if err := writer.Close(); err != nil {
-		return errors.WithStack(err)
+		return "", errors.WithStack(err)
 	}
 
-	target, err := c.baseURL.Parse("/api/v1/rooms.upload/" + url.PathEscape(string(roomID)))
+	req, err := c.newRequest(ctx, "/api/v1/rooms.media/"+url.PathEscape(string(roomID)), &body)
 	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), &body)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	if err := c.authenticate(req); err != nil {
-		return errors.WithStack(err)
+		return "", errors.WithStack(err)
 	}
 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
+	var result struct {
+		File struct {
+			ID string `json:"_id"`
+		} `json:"file"`
+	}
+
+	if err := c.do(req, courier.FilenameFor(attachment), &result); err != nil {
+		return "", errors.WithStack(err)
+	}
+
+	if result.File.ID == "" {
+		return "", errors.Errorf("could not upload %q: rocket.chat returned no file identifier",
+			courier.FilenameFor(attachment))
+	}
+
+	return result.File.ID, nil
+}
+
+// confirmMedia turns an uploaded file into a message in the room. The text
+// rides along as the message itself rather than as the file description: a
+// description is shown under the file name, where a reply does not belong.
+func (c *restClient) confirmMedia(ctx context.Context, roomID courier.ChannelID, fileID, description string) error {
+	payload, err := json.Marshal(struct {
+		Msg string `json:"msg,omitempty"`
+	}{Msg: description})
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	req, err := c.newRequest(ctx,
+		"/api/v1/rooms.mediaConfirm/"+url.PathEscape(string(roomID))+"/"+url.PathEscape(fileID),
+		bytes.NewReader(payload))
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	return errors.WithStack(c.do(req, fileID, nil))
+}
+
+// newRequest builds an authenticated POST against the REST API.
+func (c *restClient) newRequest(ctx context.Context, path string, body io.Reader) (*http.Request, error) {
+	target, err := c.baseURL.Parse(path)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), body)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	if err := c.authenticate(req); err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return req, nil
+}
+
+// do runs the request and decodes result when one is expected. A refused call
+// carries the reason Rocket.Chat gave: a bare status code says neither which
+// endpoint disappeared nor which permission is missing.
+func (c *restClient) do(req *http.Request, subject string, result any) error {
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return errors.WithStack(err)
@@ -156,9 +224,22 @@ func (c *restClient) upload(ctx context.Context, roomID courier.ChannelID, attac
 
 	defer resp.Body.Close()
 
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		return errors.Errorf("could not upload %q: unexpected status %d",
-			courier.FilenameFor(attachment), resp.StatusCode)
+		return errors.Errorf("could not upload %q: unexpected status %d on %s: %s",
+			subject, resp.StatusCode, req.URL.Path, bytes.TrimSpace(body))
+	}
+
+	if result == nil {
+		return nil
+	}
+
+	if err := json.Unmarshal(body, result); err != nil {
+		return errors.Wrapf(err, "could not upload %q: unreadable response", subject)
 	}
 
 	return nil
