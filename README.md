@@ -190,3 +190,7 @@ func TestProviderConformance(t *testing.T) {
 ```
 
 See [`./examples`](./examples) for more examples.
+
+## License
+
+This library is released under the [GNU General Public License v3.0](LICENSE).
