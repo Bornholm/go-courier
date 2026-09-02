@@ -51,14 +51,28 @@ type dataMessage struct {
 		Author string `json:"author"`
 	} `json:"quote"`
 
-	Attachments []struct {
-		ID          string `json:"id"`
-		ContentType string `json:"contentType"`
-		Filename    string `json:"filename"`
-		Size        int64  `json:"size"`
-		// VoiceNote distingue un mémo vocal d'un simple fichier audio.
-		VoiceNote bool `json:"voiceNote"`
-	} `json:"attachments"`
+	Attachments []attachmentMeta `json:"attachments"`
+
+	// Previews carries the link preview cards the sender's client generated
+	// for URLs in the message. The image, when present, is a regular
+	// attachment fetchable through getAttachment.
+	Previews []struct {
+		URL         string          `json:"url"`
+		Title       string          `json:"title"`
+		Description string          `json:"description"`
+		Image       *attachmentMeta `json:"image"`
+	} `json:"previews"`
+}
+
+// attachmentMeta mirrors the attachment description of a "receive"
+// notification, shared by message attachments and link preview images.
+type attachmentMeta struct {
+	ID          string `json:"id"`
+	ContentType string `json:"contentType"`
+	Filename    string `json:"filename"`
+	Size        int64  `json:"size"`
+	// VoiceNote distingue un mémo vocal d'un simple fichier audio.
+	VoiceNote bool `json:"voiceNote"`
 }
 
 // toMessage converts a receive notification to a courier.Message. ok is
@@ -115,6 +129,26 @@ func (p *Provider) toMessage(raw json.RawMessage) (courier.Message, bool) {
 		options = append(options, courier.WithMessagePart(p.toAttachment(i, channel.ChannelID(), params.Envelope.Source, attachment)))
 	}
 
+	for i, raw := range data.Previews {
+		if raw.URL == "" {
+			continue
+		}
+
+		preview := courier.LinkPreview{
+			URL:         raw.URL,
+			Title:       raw.Title,
+			Description: raw.Description,
+		}
+
+		// The preview image stays out of the message parts: it describes the
+		// linked page, it is not a file the sender attached.
+		if raw.Image != nil {
+			preview.Thumbnail = p.toAttachment(i, channel.ChannelID(), params.Envelope.Source, *raw.Image)
+		}
+
+		options = append(options, courier.WithMessageLinkPreviews(preview))
+	}
+
 	// Signal identifies a message by its sender timestamp; unique per
 	// (sender, timestamp), which is enough for deduplication downstream.
 	id := courier.MessageID(fmt.Sprintf("%s:%d", params.Envelope.Source, messageTimestamp(params)))
@@ -156,13 +190,7 @@ func displayName(name, fallback string) string {
 // getAttachment RPC method on first read, never at reception. Replayable by
 // construction — the daemon keeps attachment files on disk, each Reader call
 // fetches them again.
-func (p *Provider) toAttachment(index int, channelID courier.ChannelID, sender string, meta struct {
-	ID          string `json:"id"`
-	ContentType string `json:"contentType"`
-	Filename    string `json:"filename"`
-	Size        int64  `json:"size"`
-	VoiceNote   bool   `json:"voiceNote"`
-}) courier.Attachment {
+func (p *Provider) toAttachment(index int, channelID courier.ChannelID, sender string, meta attachmentMeta) courier.Attachment {
 	contentType := meta.ContentType
 	if contentType == "" {
 		contentType = "application/octet-stream"

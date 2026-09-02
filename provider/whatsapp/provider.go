@@ -175,6 +175,10 @@ func (p *Provider) toMessage(ctx context.Context, client *whatsmeow.Client, even
 
 	funcs = append(funcs, courier.WithMessageMainPart(text))
 
+	if previews := linkPreviewsOf(event.Message); len(previews) > 0 {
+		funcs = append(funcs, courier.WithMessageLinkPreviews(previews...))
+	}
+
 	contextInfo := contextInfoOf(event.Message)
 
 	if contextInfo != nil {
@@ -504,6 +508,37 @@ func textOf(msg *waE2E.Message) string {
 	default:
 		return ""
 	}
+}
+
+// linkPreviewsOf extracts the preview card of a link share. WhatsApp wraps
+// one in ExtendedTextMessage: the matched URL, the page title and
+// description, and an inline JPEG thumbnail. A bare URL in a text message
+// carries none of those and yields nothing — only an actual preview card
+// counts, otherwise every message quoting a link would be flagged.
+func linkPreviewsOf(msg *waE2E.Message) []courier.LinkPreview {
+	ext := msg.GetExtendedTextMessage()
+	if ext == nil {
+		return nil
+	}
+
+	url := ext.GetMatchedText()
+	thumbnail := ext.GetJPEGThumbnail()
+
+	if url == "" || (ext.GetTitle() == "" && ext.GetDescription() == "" && len(thumbnail) == 0) {
+		return nil
+	}
+
+	preview := courier.LinkPreview{
+		URL:         url,
+		Title:       ext.GetTitle(),
+		Description: ext.GetDescription(),
+	}
+
+	if len(thumbnail) > 0 {
+		preview.Thumbnail = courier.NewMessagePart("link-preview", "image/jpeg", courier.OpenerFromBytes(thumbnail))
+	}
+
+	return []courier.LinkPreview{preview}
 }
 
 // contextInfoOf returns the context info of a message, holding mentions and

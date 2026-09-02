@@ -90,3 +90,48 @@ func TestToMessage_VoiceNote(t *testing.T) {
 		t.Error("la note vocale doit être signalée comme telle")
 	}
 }
+
+// Un lien partagé avec sa carte de prévisualisation est distingué d'un
+// simple texte : l'application doit savoir qu'aucun fichier n'accompagne le
+// message, et l'image de la carte ne doit surtout pas passer pour une pièce
+// jointe.
+func TestToMessage_LinkPreviews(t *testing.T) {
+	provider := NewProvider()
+
+	message, ok := provider.toMessage(json.RawMessage(`{"envelope":{"source":"+337","timestamp":1,"dataMessage":{"message":"https://example.com/watch","previews":[{"url":"https://example.com/watch","title":"Une vidéo","description":"desc","image":{"id":"img1","contentType":"image/jpeg","size":123}}]}}}`))
+	if !ok {
+		t.Fatal("message attendu")
+	}
+
+	previews := courier.LinkPreviews(message)
+	if len(previews) != 1 {
+		t.Fatalf("previews = %d", len(previews))
+	}
+
+	preview := previews[0]
+	if preview.URL != "https://example.com/watch" || preview.Title != "Une vidéo" || preview.Description != "desc" {
+		t.Errorf("preview = %+v", preview)
+	}
+	if preview.Thumbnail == nil {
+		t.Error("l'image de la carte doit être exposée comme vignette")
+	}
+
+	if attachments := courier.Attachments(message); len(attachments) != 0 {
+		t.Errorf("attachments = %d, la vignette ne doit pas être une pièce jointe", len(attachments))
+	}
+}
+
+// Une prévisualisation sans URL (payload dégénéré) est ignorée plutôt que de
+// produire une carte vide.
+func TestToMessage_LinkPreviewWithoutURL(t *testing.T) {
+	provider := NewProvider()
+
+	message, ok := provider.toMessage(json.RawMessage(`{"envelope":{"source":"+337","timestamp":1,"dataMessage":{"message":"coucou","previews":[{"title":"sans url"}]}}}`))
+	if !ok {
+		t.Fatal("message attendu")
+	}
+
+	if previews := courier.LinkPreviews(message); len(previews) != 0 {
+		t.Errorf("previews = %d, attendu 0", len(previews))
+	}
+}

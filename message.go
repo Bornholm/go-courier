@@ -62,13 +62,14 @@ type Mention struct {
 }
 
 type BaseMessage struct {
-	id        MessageID
-	channel   Channel
-	from      User
-	parts     []MessagePart
-	sentAt    time.Time
-	mentions  []Mention
-	inReplyTo MessageID
+	id           MessageID
+	channel      Channel
+	from         User
+	parts        []MessagePart
+	sentAt       time.Time
+	mentions     []Mention
+	inReplyTo    MessageID
+	linkPreviews []LinkPreview
 }
 
 // Channel implements Message.
@@ -106,11 +107,17 @@ func (m *BaseMessage) InReplyTo() MessageID {
 	return m.inReplyTo
 }
 
+// LinkPreviews implements LinkPreviewMessage.
+func (m *BaseMessage) LinkPreviews() []LinkPreview {
+	return m.linkPreviews
+}
+
 type BaseMessageOptions struct {
-	SentAt    time.Time
-	Parts     []MessagePart
-	Mentions  []Mention
-	InReplyTo MessageID
+	SentAt       time.Time
+	Parts        []MessagePart
+	Mentions     []Mention
+	InReplyTo    MessageID
+	LinkPreviews []LinkPreview
 }
 
 type BaseMessageOptionFunc func(opts *BaseMessageOptions)
@@ -167,23 +174,33 @@ func WithMessageInReplyTo(messageID MessageID) BaseMessageOptionFunc {
 	}
 }
 
+// WithMessageLinkPreviews declares the link preview cards carried by the
+// message.
+func WithMessageLinkPreviews(previews ...LinkPreview) BaseMessageOptionFunc {
+	return func(opts *BaseMessageOptions) {
+		opts.LinkPreviews = append(opts.LinkPreviews, previews...)
+	}
+}
+
 func NewMessage(id MessageID, channel Channel, from User, funcs ...BaseMessageOptionFunc) *BaseMessage {
 	opts := NewBaseMessageOptions(funcs...)
 	return &BaseMessage{
-		id:        id,
-		channel:   channel,
-		from:      from,
-		parts:     opts.Parts,
-		sentAt:    opts.SentAt,
-		mentions:  opts.Mentions,
-		inReplyTo: opts.InReplyTo,
+		id:           id,
+		channel:      channel,
+		from:         from,
+		parts:        opts.Parts,
+		sentAt:       opts.SentAt,
+		mentions:     opts.Mentions,
+		inReplyTo:    opts.InReplyTo,
+		linkPreviews: opts.LinkPreviews,
 	}
 }
 
 var (
-	_ Message          = &BaseMessage{}
-	_ MentionedMessage = &BaseMessage{}
-	_ ThreadedMessage  = &BaseMessage{}
+	_ Message            = &BaseMessage{}
+	_ MentionedMessage   = &BaseMessage{}
+	_ ThreadedMessage    = &BaseMessage{}
+	_ LinkPreviewMessage = &BaseMessage{}
 )
 
 type BaseMessagePart struct {

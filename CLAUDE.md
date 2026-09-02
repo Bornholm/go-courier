@@ -30,6 +30,7 @@ Interfaces message optionnelles :
 
 - `MentionedMessage` — `Mentions() []Mention`, via le helper `courier.Mentions`
 - `ThreadedMessage` — `InReplyTo() MessageID`, via le helper `courier.InReplyTo`
+- `LinkPreviewMessage` — `LinkPreviews() []LinkPreview`, via le helper `courier.LinkPreviews` : cartes de prévisualisation d'un lien partagé (URL, titre, description, vignette). La vignette reste hors de `Attachments()` — un partage de lien n'est pas un envoi de fichier. Alimenté par WhatsApp et Signal.
 
 ### Providers disponibles (`provider/`)
 
