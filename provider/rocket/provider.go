@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 
 	"github.com/bornholm/go-courier"
 	"github.com/bornholm/go-courier/syncx"
@@ -20,6 +21,11 @@ type Provider struct {
 
 	client      *ddp.Client
 	clientMutex sync.Mutex
+	// needsLogin marks a connection that lost its authentication, so the
+	// next CONNECTED status triggers a fresh login. Atomic rather than
+	// guarded by clientMutex: it is written from the DDP status callback,
+	// which must never take that lock (see Status).
+	needsLogin atomic.Bool
 
 	releaseMutex sync.Mutex
 	release      []courier.CloseFunc
@@ -65,18 +71,82 @@ func (p *Provider) SetStatus(ctx context.Context, status courier.Status, channel
 }
 
 // Status implements ddp.StatusListener.
+//
+// This callback MUST NOT touch the client, and MUST NOT take clientMutex.
+// The DDP library calls it synchronously from inside its own connection
+// handling: Close() ends with status(DISCONNECTED), so any work done here
+// under clientMutex re-enters this very function with the lock already
+// held. sync.Mutex is not reentrant, and the provider would deadlock for
+// good — silently, since the socket is already down. That is exactly what
+// used to happen when a reconnect Dial failed, which is precisely when a
+// network outage occurs.
+//
+// Reconnecting is not this function's job either: the library reschedules
+// it on its own (reconnectLater, called when the read loop ends and when a
+// ping times out) and replays subscriptions afterwards. All that is left
+// here is to report, and to remember that the next connection will need a
+// fresh login — a resumed DDP session does not carry Rocket.Chat's
+// authentication (see reauthenticate).
 func (p *Provider) Status(status int) {
-	if status != ddp.DISCONNECTED {
+	switch status {
+	case ddp.DISCONNECTED:
+		// Warn, not Error: the library will reconnect by itself, and a
+		// dropped websocket is a routine event on a long-lived connection.
+		slog.Warn("lost rocket.chat connection, waiting for the client to reconnect",
+			slog.String("serverURL", p.opts.ServerURL.String()))
+		p.needsLogin.Store(true)
+
+	case ddp.CONNECTED:
+		if !p.needsLogin.CompareAndSwap(true, false) {
+			// First connection: getClient already logged in.
+			return
+		}
+
+		// Off the callback goroutine: reauthenticate calls into the client,
+		// which would deadlock here for the reasons above.
+		go p.reauthenticate()
+	}
+}
+
+// reauthenticate logs in again after the library has reconnected.
+//
+// The DDP session is resumed, but Rocket.Chat does not carry authentication
+// across it: without a fresh login the replayed "stream-room-messages"
+// subscription is accepted and then stays mute. The account looks connected
+// and receives nothing — the worst kind of failure, because nothing reports
+// it.
+func (p *Provider) reauthenticate() {
+	p.clientMutex.Lock()
+	client := p.client
+	p.clientMutex.Unlock()
+
+	if client == nil {
 		return
 	}
 
-	slog.Error("lost rocket.chat connection", slog.String("serverURL", p.opts.ServerURL.String()))
+	result, err := client.Call("login", ddp.NewUsernameLogin(p.opts.Username, p.opts.Password))
+	if err != nil {
+		// Nothing else to do: the library keeps reconnecting, and each
+		// successful connection gets another attempt.
+		p.needsLogin.Store(true)
+		slog.Error("could not log in again after reconnecting to rocket server",
+			slog.String("serverURL", p.opts.ServerURL.String()), slog.Any("error", err))
+		return
+	}
 
-	p.clientMutex.Lock()
-	defer p.clientMutex.Unlock()
+	if err := p.storeCredentials(result); err != nil {
+		slog.Error("could not store credentials after reconnecting to rocket server",
+			slog.String("serverURL", p.opts.ServerURL.String()), slog.Any("error", err))
+		return
+	}
 
-	p.client.Close()
-	p.client.Reconnect()
+	// The subscription is replayed by the library, but only the ones it
+	// still holds; re-sending it is idempotent and covers the case where
+	// the resumed session dropped it.
+	client.Sub("stream-room-messages", "__my_messages__", true)
+
+	slog.Info("reconnected and authenticated with rocket server",
+		slog.String("serverURL", p.opts.ServerURL.String()))
 }
 
 // Listen implements courier.Provider.
