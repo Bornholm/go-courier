@@ -36,6 +36,15 @@ type Options struct {
 	// Once a message has been received from a chat, that chat's own setting
 	// always wins over this value.
 	DisappearingTimer time.Duration
+	// LogLevel is the verbosity of whatsmeow's own logger: "DEBUG", "INFO",
+	// "WARN" or "ERROR". Empty means "INFO".
+	//
+	// The default used to be DEBUG, which logs every protocol frame — a
+	// keepalive pair every twenty-five seconds, forever. On a long-lived
+	// deployment that buries every other line in the log, and it was found
+	// the hard way: it made a real incident considerably harder to diagnose.
+	// Debugging the protocol is a deliberate act, not a default.
+	LogLevel string
 }
 
 type OptionFunc func(opts *Options)
@@ -45,6 +54,7 @@ func NewOptions(funcs ...OptionFunc) *Options {
 		DBPath:          "whatsapp.db",
 		PushName:        "-",
 		MaxInMemorySize: courier.DefaultMaxInMemorySize,
+		LogLevel:        "INFO",
 	}
 	for _, fn := range funcs {
 		fn(opts)
@@ -67,6 +77,15 @@ func WithPushName(name string) OptionFunc {
 func WithMaxInMemorySize(size int64) OptionFunc {
 	return func(opts *Options) {
 		opts.MaxInMemorySize = size
+	}
+}
+
+// WithLogLevel sets the verbosity of whatsmeow's own logger: "DEBUG",
+// "INFO", "WARN" or "ERROR". Use DEBUG only to investigate the protocol —
+// it prints every frame, keepalives included.
+func WithLogLevel(level string) OptionFunc {
+	return func(opts *Options) {
+		opts.LogLevel = level
 	}
 }
 

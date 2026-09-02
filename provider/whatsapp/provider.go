@@ -416,11 +416,19 @@ func (p *Provider) releaseAll() {
 	}
 }
 
+// logLevel returns the verbosity to hand whatsmeow, defaulting to INFO.
+func (p *Provider) logLevel() string {
+	if p.opts.LogLevel == "" {
+		return "INFO"
+	}
+	return p.opts.LogLevel
+}
+
 func (p *Provider) getClient(ctx context.Context) (*whatsmeow.Client, error) {
 	p.initOnce.Do(func() {
 		slog.DebugContext(ctx, "initializing whatsapp client")
 
-		dbLog := waLog.Stdout("Database", "DEBUG", true)
+		dbLog := waLog.Stdout("Database", p.logLevel(), true)
 		container, err := sqlstore.New(ctx, "sqlite3", fmt.Sprintf("%s?_foreign_keys=on", p.opts.DBPath), dbLog)
 		if err != nil {
 			p.initErr = errors.WithStack(err)
@@ -433,7 +441,7 @@ func (p *Provider) getClient(ctx context.Context) (*whatsmeow.Client, error) {
 			return
 		}
 
-		clientLog := waLog.Stdout("Client", "DEBUG", true)
+		clientLog := waLog.Stdout("Client", p.logLevel(), true)
 
 		client := whatsmeow.NewClient(device, clientLog)
 
