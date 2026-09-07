@@ -183,20 +183,20 @@ func (p *Provider) Listen(ctx context.Context) (chan courier.Message, error) {
 
 // Send implements courier.Provider. Attachments go through the REST API,
 // which is the only way to upload a file.
-func (p *Provider) Send(ctx context.Context, message courier.Message) error {
+func (p *Provider) Send(ctx context.Context, message courier.Message) (courier.MessageID, error) {
 	client, err := p.getClient()
 	if err != nil {
-		return errors.WithStack(err)
+		return "", errors.WithStack(err)
 	}
 
 	channel := message.Channel()
 	if channel == nil {
-		return errors.New("message has no channel")
+		return "", errors.New("message has no channel")
 	}
 
 	content, err := courier.GetMessageMainContent(ctx, message)
 	if err != nil && !errors.Is(err, courier.ErrNotFound) {
-		return errors.WithStack(err)
+		return "", errors.WithStack(err)
 	}
 
 	attachments := courier.Attachments(message)
@@ -210,17 +210,17 @@ func (p *Provider) Send(ctx context.Context, message courier.Message) error {
 		}
 
 		if err := p.rest.upload(ctx, channel.ChannelID(), attachment, description); err != nil {
-			return errors.WithStack(err)
+			return "", errors.WithStack(err)
 		}
 	}
 
 	// The text has already been sent as the description of the first upload.
 	if len(attachments) > 0 {
-		return nil
+		return message.ID(), nil
 	}
 
 	if content == "" {
-		return errors.New("message has neither content nor attachment")
+		return "", errors.New("message has neither content nor attachment")
 	}
 
 	payload := map[string]any{
@@ -234,10 +234,10 @@ func (p *Provider) Send(ctx context.Context, message courier.Message) error {
 	}
 
 	if _, err := client.Call("sendMessage", payload); err != nil {
-		return errors.WithStack(err)
+		return "", errors.WithStack(err)
 	}
 
-	return nil
+	return message.ID(), nil
 }
 
 // Self implements courier.SelfProvider.

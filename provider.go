@@ -7,7 +7,15 @@ import (
 
 type Provider interface {
 	Listen(ctx context.Context) (chan Message, error)
-	Send(ctx context.Context, message Message) error
+
+	// Send delivers the message and returns the identifier the platform
+	// assigned to it. That identifier is what later ties a reaction, a
+	// receipt or a reply back to what was sent: discarding it leaves an
+	// application unable to recognise feedback on its own messages.
+	//
+	// Providers whose platform reports no identifier return the identifier
+	// of the message they were handed.
+	Send(ctx context.Context, message Message) (MessageID, error)
 }
 
 type Presence string
@@ -74,6 +82,9 @@ const (
 	CapabilityThreads  Capability = "threads"
 	CapabilityPresence Capability = "presence"
 	CapabilityStatus   Capability = "status"
+	// CapabilityReactions is declared when the provider streams the
+	// reactions users leave on messages, see ReactionProvider.
+	CapabilityReactions Capability = "reactions"
 )
 
 // CapabilityProvider is implemented by providers advertising what they

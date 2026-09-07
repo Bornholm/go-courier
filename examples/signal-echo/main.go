@@ -56,7 +56,7 @@ func main() {
 			courier.WithMessageMainPart("echo: "+content),
 		)
 
-		if err := provider.Send(ctx, reply); err != nil {
+		if _, err := provider.Send(ctx, reply); err != nil {
 			log.Printf("échec de l'envoi: %+v", err)
 		}
 	}

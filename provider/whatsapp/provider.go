@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/bornholm/go-courier"
 	"github.com/bornholm/go-courier/syncx"
@@ -199,29 +200,117 @@ func (p *Provider) toMessage(ctx context.Context, client *whatsmeow.Client, even
 	)
 }
 
+// ListenReactions implements courier.ReactionProvider.
+//
+// WhatsApp has no dedicated reaction event: a reaction travels as an
+// ordinary message whose payload is a ReactionMessage. It therefore reaches
+// the same event stream as everything else, and the handler below sorts it
+// out. Listen ignores it, having neither text nor media to forward.
+func (p *Provider) ListenReactions(ctx context.Context) (chan courier.Reaction, error) {
+	client, err := p.getClient(ctx)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	reactions := make(chan courier.Reaction)
+
+	client.AddEventHandler(func(evt any) {
+		event, ok := evt.(*events.Message)
+		if !ok {
+			return
+		}
+
+		// Only OUR OWN reactions are dropped here. A reaction sent by
+		// someone else ON a message we sent is precisely the interesting
+		// case, and IsFromMe describes the sender of this event — the
+		// person reacting — not the author of the message reacted to.
+		if event.Info.MessageSource.IsFromMe {
+			return
+		}
+
+		reaction, ok := p.toReaction(ctx, client, event)
+		if !ok {
+			return
+		}
+
+		select {
+		case reactions <- reaction:
+		case <-ctx.Done():
+		}
+	})
+
+	return reactions, nil
+}
+
+// toReaction converts an event into a reaction, reporting false when the
+// event carries none.
+func (p *Provider) toReaction(ctx context.Context, client *whatsmeow.Client, event *events.Message) (courier.Reaction, bool) {
+	raw := event.Message.GetReactionMessage()
+
+	// Community announcement groups encrypt reactions separately; the
+	// payload is useless until decrypted with the message secret.
+	if raw == nil && event.Message.GetEncReactionMessage() != nil {
+		decrypted, err := client.DecryptReaction(ctx, event)
+		if err != nil {
+			slog.WarnContext(ctx, "could not decrypt reaction", slog.Any("error", err))
+
+			return courier.Reaction{}, false
+		}
+
+		raw = decrypted
+	}
+
+	if raw == nil {
+		return courier.Reaction{}, false
+	}
+
+	// Without the reacted message there is nothing to attach the feedback
+	// to, and a reaction pointing nowhere is worse than none.
+	target := raw.GetKey().GetID()
+	if target == "" {
+		return courier.Reaction{}, false
+	}
+
+	reactedAt := event.Info.Timestamp
+	if ms := raw.GetSenderTimestampMS(); ms > 0 {
+		reactedAt = time.UnixMilli(ms)
+	}
+
+	return courier.Reaction{
+		MessageID: courier.MessageID(target),
+		Channel:   p.channelOf(ctx, client, event.Info.MessageSource.Chat),
+		From:      courier.NewUser(userIDOf(event.Info.MessageSource.Sender), event.Info.PushName),
+		// An empty text is WhatsApp's way of taking a reaction back
+		// (whatsmeow.RemoveReactionText), which courier.Reaction adopts as
+		// its own convention.
+		Emoji:     raw.GetText(),
+		ReactedAt: reactedAt,
+	}, true
+}
+
 // Send implements courier.Provider.
 //
 // WhatsApp carries at most one media per message, so a message with several
 // attachments is split: the text rides along as the caption of the first one.
-func (p *Provider) Send(ctx context.Context, message courier.Message) error {
+func (p *Provider) Send(ctx context.Context, message courier.Message) (courier.MessageID, error) {
 	client, err := p.getClient(ctx)
 	if err != nil {
-		return errors.WithStack(err)
+		return "", errors.WithStack(err)
 	}
 
 	channel := message.Channel()
 	if channel == nil {
-		return errors.New("message has no channel")
+		return "", errors.New("message has no channel")
 	}
 
 	to, err := types.ParseJID(string(channel.ChannelID()))
 	if err != nil {
-		return errors.WithStack(err)
+		return "", errors.WithStack(err)
 	}
 
 	content, err := courier.GetMessageMainContent(ctx, message)
 	if err != nil && !errors.Is(err, courier.ErrNotFound) {
-		return errors.WithStack(err)
+		return "", errors.WithStack(err)
 	}
 
 	attachments := courier.Attachments(message)
@@ -233,11 +322,16 @@ func (p *Provider) Send(ctx context.Context, message courier.Message) error {
 
 	if len(attachments) == 0 {
 		if content == "" {
-			return errors.New("message has neither content nor attachment")
+			return "", errors.New("message has neither content nor attachment")
 		}
 
-		return errors.WithStack(p.sendText(ctx, client, to, content))
+		return p.sendText(ctx, client, to, content)
 	}
+
+	// A message split over several media yields several platform
+	// identifiers. The FIRST is returned: it is the one carrying the text,
+	// hence the one a user reacts to when judging the answer.
+	var first courier.MessageID
 
 	for idx, attachment := range attachments {
 		// Only the first media carries the text, otherwise it would be
@@ -249,20 +343,25 @@ func (p *Provider) Send(ctx context.Context, message courier.Message) error {
 
 		payload, err := buildMediaMessage(ctx, client, attachment, caption)
 		if err != nil {
-			return errors.WithStack(err)
+			return "", errors.WithStack(err)
 		}
 
 		p.applyExpiration(payload, to)
 
-		if _, err := client.SendMessage(ctx, to, payload); err != nil {
-			return errors.WithStack(err)
+		resp, err := client.SendMessage(ctx, to, payload)
+		if err != nil {
+			return "", errors.WithStack(err)
+		}
+
+		if first == "" {
+			first = courier.MessageID(resp.ID)
 		}
 	}
 
-	return nil
+	return first, nil
 }
 
-func (p *Provider) sendText(ctx context.Context, client *whatsmeow.Client, to types.JID, content string) error {
+func (p *Provider) sendText(ctx context.Context, client *whatsmeow.Client, to types.JID, content string) (courier.MessageID, error) {
 	payload := &waE2E.Message{
 		ExtendedTextMessage: &waE2E.ExtendedTextMessage{
 			Text: proto.String(content),
@@ -270,9 +369,12 @@ func (p *Provider) sendText(ctx context.Context, client *whatsmeow.Client, to ty
 	}
 	p.applyExpiration(payload, to)
 
-	_, err := client.SendMessage(ctx, to, payload)
+	resp, err := client.SendMessage(ctx, to, payload)
+	if err != nil {
+		return "", errors.WithStack(err)
+	}
 
-	return errors.WithStack(err)
+	return courier.MessageID(resp.ID), nil
 }
 
 // rememberExpiration records the disappearing-messages setting carried by an
@@ -363,6 +465,7 @@ func (p *Provider) Capabilities() []courier.Capability {
 		courier.CapabilityThreads,
 		courier.CapabilityPresence,
 		courier.CapabilityStatus,
+		courier.CapabilityReactions,
 	}
 }
 
@@ -682,4 +785,5 @@ var (
 	_ courier.SelfProvider       = &Provider{}
 	_ courier.ChannelResolver    = &Provider{}
 	_ courier.CapabilityProvider = &Provider{}
+	_ courier.ReactionProvider   = &Provider{}
 )

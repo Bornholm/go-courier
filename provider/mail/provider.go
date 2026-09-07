@@ -52,12 +52,12 @@ func (p *Provider) Listen(ctx context.Context) (chan courier.Message, error) {
 }
 
 // Send implements courier.Provider.
-func (p *Provider) Send(ctx context.Context, message courier.Message) error {
+func (p *Provider) Send(ctx context.Context, message courier.Message) (courier.MessageID, error) {
 	if err := p.sendMessage(ctx, message); err != nil {
-		return errors.WithStack(err)
+		return "", errors.WithStack(err)
 	}
 
-	return nil
+	return message.ID(), nil
 }
 
 // Self implements courier.SelfProvider.

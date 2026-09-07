@@ -156,7 +156,7 @@ func handle(ctx context.Context, provider courier.Provider, self courier.User, m
 
 	reply := courier.NewMessage(courier.RandomMessageID(), channel, self, funcs...)
 
-	if err := provider.Send(ctx, reply); err != nil {
+	if _, err := provider.Send(ctx, reply); err != nil {
 		return errors.WithStack(err)
 	}
 

@@ -461,7 +461,7 @@ func TestUploadTooLarge(t *testing.T) {
 func TestSendBeforeListen(t *testing.T) {
 	provider := rest.NewProvider()
 
-	err := provider.Send(context.Background(), courier.NewMessage(
+	_, err := provider.Send(context.Background(), courier.NewMessage(
 		courier.RandomMessageID(),
 		courier.NewChannelRef("demo"),
 		courier.NewUser("user-1", "User"),

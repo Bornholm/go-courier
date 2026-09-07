@@ -94,7 +94,7 @@ func echo(ctx context.Context, provider courier.Provider, message courier.Messag
 		funcs...,
 	)
 
-	if err := provider.Send(ctx, reply); err != nil {
+	if _, err := provider.Send(ctx, reply); err != nil {
 		return errors.WithStack(err)
 	}
 

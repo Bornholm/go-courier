@@ -23,6 +23,9 @@ type Provider struct {
 
 	sentMutex sync.RWMutex
 	sent      []courier.Message
+
+	reactionMutex     sync.RWMutex
+	reactionListeners []chan courier.Reaction
 }
 
 // Listen implements courier.Provider. Each call returns its own channel, and
@@ -48,20 +51,20 @@ func (p *Provider) Listen(ctx context.Context) (chan courier.Message, error) {
 
 // Send implements courier.Provider. Messages are recorded and, when loopback
 // is enabled, delivered back to the listeners.
-func (p *Provider) Send(ctx context.Context, message courier.Message) error {
+func (p *Provider) Send(ctx context.Context, message courier.Message) (courier.MessageID, error) {
 	p.sentMutex.Lock()
 	p.sent = append(p.sent, message)
 	p.sentMutex.Unlock()
 
 	if !p.opts.Loopback {
-		return nil
+		return message.ID(), nil
 	}
 
 	if err := p.Deliver(ctx, message); err != nil {
-		return errors.WithStack(err)
+		return "", errors.WithStack(err)
 	}
 
-	return nil
+	return message.ID(), nil
 }
 
 // Deliver simulates an incoming message, as if it came from the platform.
@@ -85,6 +88,73 @@ func (p *Provider) Deliver(ctx context.Context, message courier.Message) error {
 	}
 
 	return nil
+}
+
+// ListenReactions implements courier.ReactionProvider. Like Listen, each
+// call gets its own channel and every reaction is fanned out to all of them.
+func (p *Provider) ListenReactions(ctx context.Context) (chan courier.Reaction, error) {
+	p.mutex.RLock()
+	closed := p.closed
+	p.mutex.RUnlock()
+
+	if closed {
+		return nil, errors.WithStack(courier.ErrClosed)
+	}
+
+	reactions := make(chan courier.Reaction, p.opts.BufferSize)
+
+	p.reactionMutex.Lock()
+	p.reactionListeners = append(p.reactionListeners, reactions)
+	p.reactionMutex.Unlock()
+
+	go func() {
+		<-ctx.Done()
+		p.removeReactionListener(reactions)
+	}()
+
+	return reactions, nil
+}
+
+// React simulates a user reacting to a message. An empty emoji simulates a
+// user taking their reaction back, as on a real platform.
+func (p *Provider) React(ctx context.Context, reaction courier.Reaction) error {
+	p.mutex.RLock()
+	closed := p.closed
+	p.mutex.RUnlock()
+
+	if closed {
+		return errors.WithStack(courier.ErrClosed)
+	}
+
+	p.reactionMutex.RLock()
+	listeners := make([]chan courier.Reaction, len(p.reactionListeners))
+	copy(listeners, p.reactionListeners)
+	p.reactionMutex.RUnlock()
+
+	for _, listener := range listeners {
+		select {
+		case listener <- reaction:
+		case <-ctx.Done():
+			return errors.WithStack(ctx.Err())
+		}
+	}
+
+	return nil
+}
+
+func (p *Provider) removeReactionListener(target chan courier.Reaction) {
+	p.reactionMutex.Lock()
+	defer p.reactionMutex.Unlock()
+
+	for idx, listener := range p.reactionListeners {
+		if listener != target {
+			continue
+		}
+
+		p.reactionListeners = append(p.reactionListeners[:idx], p.reactionListeners[idx+1:]...)
+
+		return
+	}
 }
 
 // Sent returns the messages passed to Send, in order.
@@ -123,6 +193,13 @@ func (p *Provider) Close() error {
 
 	p.listeners = nil
 
+	p.reactionMutex.Lock()
+	for _, listener := range p.reactionListeners {
+		close(listener)
+	}
+	p.reactionListeners = nil
+	p.reactionMutex.Unlock()
+
 	return nil
 }
 
@@ -148,6 +225,7 @@ func (p *Provider) Capabilities() []courier.Capability {
 		courier.CapabilityChannelKind,
 		courier.CapabilityMentions,
 		courier.CapabilityThreads,
+		courier.CapabilityReactions,
 	}
 }
 
@@ -169,9 +247,10 @@ func (p *Provider) removeListener(target chan courier.Message) {
 
 func NewProvider(funcs ...OptionFunc) *Provider {
 	return &Provider{
-		opts:      NewOptions(funcs...),
-		listeners: []chan courier.Message{},
-		sent:      []courier.Message{},
+		opts:              NewOptions(funcs...),
+		listeners:         []chan courier.Message{},
+		sent:              []courier.Message{},
+		reactionListeners: []chan courier.Reaction{},
 	}
 }
 
@@ -180,4 +259,5 @@ var (
 	_ courier.SelfProvider       = &Provider{}
 	_ courier.ChannelResolver    = &Provider{}
 	_ courier.CapabilityProvider = &Provider{}
+	_ courier.ReactionProvider   = &Provider{}
 )

@@ -87,7 +87,7 @@ func handle(ctx context.Context, provider courier.Provider, self courier.User, m
 		courier.WithMessageInReplyTo(message.ID()),
 	)
 
-	if err := provider.Send(ctx, reply); err != nil {
+	if _, err := provider.Send(ctx, reply); err != nil {
 		return errors.WithStack(err)
 	}
 

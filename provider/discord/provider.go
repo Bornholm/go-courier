@@ -162,20 +162,20 @@ func (p *Provider) toAttachment(index int, attachment *discordgo.MessageAttachme
 }
 
 // Send implements courier.Provider.
-func (p *Provider) Send(ctx context.Context, message courier.Message) error {
+func (p *Provider) Send(ctx context.Context, message courier.Message) (courier.MessageID, error) {
 	session, err := p.getSession()
 	if err != nil {
-		return errors.WithStack(err)
+		return "", errors.WithStack(err)
 	}
 
 	channel := message.Channel()
 	if channel == nil {
-		return errors.New("message has no channel")
+		return "", errors.New("message has no channel")
 	}
 
 	content, err := courier.GetMessageMainContent(ctx, message)
 	if err != nil && !errors.Is(err, courier.ErrNotFound) {
-		return errors.WithStack(err)
+		return "", errors.WithStack(err)
 	}
 
 	send := &discordgo.MessageSend{
@@ -193,7 +193,7 @@ func (p *Provider) Send(ctx context.Context, message courier.Message) error {
 	for _, attachment := range courier.Attachments(message) {
 		reader, err := attachment.Reader(ctx)
 		if err != nil {
-			return errors.WithStack(err)
+			return "", errors.WithStack(err)
 		}
 
 		defer reader.Close()
@@ -206,14 +206,15 @@ func (p *Provider) Send(ctx context.Context, message courier.Message) error {
 	}
 
 	if send.Content == "" && len(send.Files) == 0 {
-		return errors.New("message has neither content nor attachment")
+		return "", errors.New("message has neither content nor attachment")
 	}
 
-	if _, err := session.ChannelMessageSendComplex(string(channel.ChannelID()), send); err != nil {
-		return errors.WithStack(err)
+	sent, err := session.ChannelMessageSendComplex(string(channel.ChannelID()), send)
+	if err != nil {
+		return "", errors.WithStack(err)
 	}
 
-	return nil
+	return courier.MessageID(sent.ID), nil
 }
 
 // Self implements courier.SelfProvider.

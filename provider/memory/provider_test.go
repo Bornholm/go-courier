@@ -16,6 +16,7 @@ func TestProviderConformance(t *testing.T) {
 			Provider: provider,
 			Deliver:  provider.Deliver,
 			Sent:     provider.Sent,
+			React:    provider.React,
 			Channel:  courier.NewChannel("memory", courier.ChannelKindDirect, "memory"),
 			From:     courier.NewUser("user-1", "User"),
 			Cleanup:  func() { provider.Close() },
@@ -41,7 +42,7 @@ func TestProviderLoopback(t *testing.T) {
 		courier.WithMessageMainPart("echo"),
 	)
 
-	if err := provider.Send(ctx, sent); err != nil {
+	if _, err := provider.Send(ctx, sent); err != nil {
 		t.Fatalf("provider.Send(ctx, sent): %+v", err)
 	}
 

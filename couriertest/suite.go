@@ -45,6 +45,11 @@ type Harness struct {
 	// Timeout bounds each wait. Defaults to DefaultTimeout.
 	Timeout time.Duration
 
+	// React simulates a user reacting to a message, as if it came from the
+	// platform. Optional: reaction assertions are skipped when nil, which
+	// is the case for every provider talking to a real platform.
+	React func(ctx context.Context, reaction courier.Reaction) error
+
 	// Cleanup is called when the test ends. Optional.
 	Cleanup func()
 }
@@ -71,6 +76,8 @@ func RunProviderSuite(t *testing.T, newHarness func(t *testing.T) *Harness) {
 		"Threads":            testThreads,
 		"Send":               testSend,
 		"SendAttachments":    testSendAttachments,
+		"SendReportsID":      testSendReportsID,
+		"Reactions":          testReactions,
 	} {
 		t.Run(name, func(t *testing.T) {
 			harness := newHarness(t)
@@ -379,7 +386,7 @@ func testSend(t *testing.T, h *Harness) {
 		courier.WithMessageMainPart("outgoing"),
 	)
 
-	if err := h.Provider.Send(ctx, message); err != nil {
+	if _, err := h.Provider.Send(ctx, message); err != nil {
 		t.Fatalf("Provider.Send(ctx, message): %+v", err)
 	}
 
@@ -419,7 +426,7 @@ func testSendAttachments(t *testing.T, h *Harness) {
 		)),
 	)
 
-	if err := h.Provider.Send(ctx, message); err != nil {
+	if _, err := h.Provider.Send(ctx, message); err != nil {
 		t.Fatalf("Provider.Send(ctx, message): %+v", err)
 	}
 
@@ -441,4 +448,114 @@ func testSendAttachments(t *testing.T, h *Harness) {
 	if !found {
 		t.Error("no sent message carried the report.pdf attachment")
 	}
+}
+
+// testSendReportsID checks the identifier contract of Send: what comes back
+// is what later lets an application recognise feedback on its own message.
+// An empty identifier breaks that chain silently, which is why it is checked
+// for every provider and not behind a capability.
+func testSendReportsID(t *testing.T, h *Harness) {
+	ctx, cancel := context.WithTimeout(context.Background(), h.timeout())
+	defer cancel()
+
+	message := courier.NewMessage(
+		courier.RandomMessageID(),
+		h.Channel,
+		h.From,
+		courier.WithMessageMainPart("hello"),
+	)
+
+	id, err := h.Provider.Send(ctx, message)
+	if err != nil {
+		t.Fatalf("Provider.Send(ctx, message): %+v", err)
+	}
+
+	if id == "" {
+		t.Error("Provider.Send returned an empty MessageID: a caller cannot tie a reaction back to this message")
+	}
+}
+
+// testReactions checks that a provider declaring CapabilityReactions streams
+// what a user leaves on a message, and reports a removal as an empty emoji.
+func testReactions(t *testing.T, h *Harness) {
+	if !courier.HasCapability(h.Provider, courier.CapabilityReactions) {
+		t.Skip("provider does not declare CapabilityReactions")
+	}
+	if h.React == nil {
+		t.Skip("harness cannot simulate a reaction")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), h.timeout())
+	defer cancel()
+
+	reactions, err := courier.ListenReactions(ctx, h.Provider)
+	if err != nil {
+		t.Fatalf("courier.ListenReactions(ctx, provider): %+v", err)
+	}
+	if reactions == nil {
+		t.Fatal("provider declares CapabilityReactions but ListenReactions yielded no channel")
+	}
+
+	target := courier.RandomMessageID()
+
+	sent := courier.Reaction{
+		MessageID: target,
+		Channel:   h.Channel,
+		From:      h.From,
+		Emoji:     "👍",
+		ReactedAt: time.Now(),
+	}
+
+	go func() {
+		if err := h.React(ctx, sent); err != nil {
+			t.Errorf("harness React: %+v", err)
+		}
+	}()
+
+	got := waitForReaction(t, h, reactions)
+
+	if got.MessageID != target {
+		t.Errorf("Reaction.MessageID = %q, expected %q: a reaction pointing elsewhere cannot be attached to anything", got.MessageID, target)
+	}
+	if got.Emoji != "👍" {
+		t.Errorf("Reaction.Emoji = %q, expected %q", got.Emoji, "👍")
+	}
+	if got.IsRemoval() {
+		t.Error("Reaction.IsRemoval() is true for a reaction that carries an emoji")
+	}
+
+	// Taking a reaction back travels as the same reaction with no emoji.
+	go func() {
+		removal := sent
+		removal.Emoji = ""
+		if err := h.React(ctx, removal); err != nil {
+			t.Errorf("harness React (removal): %+v", err)
+		}
+	}()
+
+	removed := waitForReaction(t, h, reactions)
+
+	if !removed.IsRemoval() {
+		t.Errorf("Reaction.IsRemoval() = false for an empty emoji %q: a removal must be distinguishable", removed.Emoji)
+	}
+	if removed.MessageID != target {
+		t.Errorf("removal MessageID = %q, expected %q", removed.MessageID, target)
+	}
+}
+
+func waitForReaction(t *testing.T, h *Harness, reactions chan courier.Reaction) courier.Reaction {
+	t.Helper()
+
+	select {
+	case reaction, ok := <-reactions:
+		if !ok {
+			t.Fatal("reaction channel closed before a reaction arrived")
+		}
+
+		return reaction
+	case <-time.After(h.timeout()):
+		t.Fatal("timed out waiting for a reaction")
+	}
+
+	return courier.Reaction{}
 }

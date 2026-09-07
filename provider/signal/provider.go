@@ -107,15 +107,15 @@ func (p *Provider) Listen(ctx context.Context) (chan courier.Message, error) {
 }
 
 // Send implements [courier.Provider].
-func (p *Provider) Send(ctx context.Context, message courier.Message) error {
+func (p *Provider) Send(ctx context.Context, message courier.Message) (courier.MessageID, error) {
 	client, err := p.connect(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	text, err := courier.GetMessageMainContent(ctx, message)
 	if err != nil && !errors.Is(err, courier.ErrNotFound) {
-		return errors.WithStack(err)
+		return "", errors.WithStack(err)
 	}
 
 	params := p.params()
@@ -129,7 +129,7 @@ func (p *Provider) Send(ctx context.Context, message courier.Message) error {
 	for _, attachment := range courier.Attachments(message) {
 		data, err := courier.ReadPart(ctx, attachment)
 		if err != nil {
-			return errors.Wrapf(err, "could not read attachment %q", attachment.Name())
+			return "", errors.Wrapf(err, "could not read attachment %q", attachment.Name())
 		}
 
 		uri := fmt.Sprintf("data:%s;filename=%s;base64,%s",
@@ -143,11 +143,26 @@ func (p *Provider) Send(ctx context.Context, message courier.Message) error {
 		params["attachments"] = attachments
 	}
 
-	if _, err := client.call(ctx, "send", params); err != nil {
-		return errors.WithStack(err)
+	// The daemon answers with the sender timestamp it stamped on the
+	// message. Combined with our own account it yields exactly the
+	// "<sender>:<timestamp>" identifier given to incoming messages, which
+	// is what lets a reaction on this message be recognised later.
+	raw, err := client.call(ctx, "send", params)
+	if err != nil {
+		return "", errors.WithStack(err)
 	}
 
-	return nil
+	var sent struct {
+		Timestamp int64 `json:"timestamp"`
+	}
+	if err := json.Unmarshal(raw, &sent); err != nil || sent.Timestamp == 0 {
+		// The message did leave; only its identifier is unknown. Reporting
+		// the local one keeps the caller's contract without pretending to
+		// a correlation we cannot make.
+		return message.ID(), nil
+	}
+
+	return courier.MessageID(fmt.Sprintf("%s:%d", p.opts.Account, sent.Timestamp)), nil
 }
 
 // addressSendParams routes channelID to either a group or a direct

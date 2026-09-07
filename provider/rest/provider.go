@@ -61,18 +61,18 @@ func (p *Provider) Listen(ctx context.Context) (chan courier.Message, error) {
 // Send implements courier.Provider. The message is handed to the subscribers
 // of its channel; its parts stay downloadable for as long as the history
 // keeps it.
-func (p *Provider) Send(ctx context.Context, message courier.Message) error {
+func (p *Provider) Send(ctx context.Context, message courier.Message) (courier.MessageID, error) {
 	p.mutex.Lock()
 	server := p.server
 	p.mutex.Unlock()
 
 	if server == nil {
-		return errors.New("provider is not listening")
+		return "", errors.New("provider is not listening")
 	}
 
 	server.publish(message)
 
-	return nil
+	return message.ID(), nil
 }
 
 // Channel implements courier.ChannelResolver.

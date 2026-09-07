@@ -101,7 +101,7 @@ func handle(ctx context.Context, provider courier.Provider, self courier.User, m
 		courier.WithMessageMainPart(fmt.Sprintf("You've just sent: '%s'", content)),
 	)
 
-	if err := provider.Send(ctx, reply); err != nil {
+	if _, err := provider.Send(ctx, reply); err != nil {
 		return errors.WithStack(err)
 	}
 

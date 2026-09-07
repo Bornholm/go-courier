@@ -10,7 +10,7 @@ Bibliothèque Go fournissant une interface unifiée pour envoyer et recevoir des
 
 ### Interfaces core (package racine `courier`)
 
-- `Provider` — interface de base : `Listen(ctx) (chan Message, error)` et `Send(ctx, message) error`
+- `Provider` — interface de base : `Listen(ctx) (chan Message, error)` et `Send(ctx, message) (MessageID, error)`. **`Send` rend l'identifiant attribué par la PLATEFORME** : c'est lui qui permet ensuite de rattacher une réaction ou un accusé au message envoyé. Un fournisseur dont la plateforme n'en donne pas rend celui du message qu'on lui a confié.
 - `Message` — `ID()`, `From()`, `SentAt()`, `Parts()`, `Channel()`
 - `MessagePart` — `Name()`, `ContentType()`, `Reader(ctx) (io.ReadCloser, error)`
 - `Attachment` — étend `MessagePart` avec `Filename()`, `Size()`, `Disposition()`, `Caption()`
@@ -25,6 +25,7 @@ Interfaces provider optionnelles, détectées par type-assertion :
 - `SelfProvider` — `Self(ctx) (User, error)` : qui suis-je sur cette plateforme
 - `ChannelResolver` — `Channel(ctx, channelID) (Channel, error)`
 - `CapabilityProvider` — `Capabilities() []Capability`
+- `ReactionProvider` — `ListenReactions(ctx) (chan Reaction, error)` : les réactions (emoji) laissées sur les messages, via le helper `courier.ListenReactions`. Canal SÉPARÉ de `Listen` à dessein — une réaction n'est pas un message, elle n'a pas de contenu et on n'y répond pas ; la faire passer par le canal des messages obligerait chaque consommateur à apprendre à l'ignorer. Le helper rend un canal NIL quand le fournisseur ne sait pas faire, ce qui se câble sans condition dans un `select`. Un emoji VIDE signifie que l'utilisateur a RETIRÉ sa réaction (convention normalisée depuis WhatsApp).
 
 Interfaces message optionnelles :
 
