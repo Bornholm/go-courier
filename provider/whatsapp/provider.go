@@ -550,6 +550,10 @@ func (p *Provider) getClient(ctx context.Context) (*whatsmeow.Client, error) {
 
 		client.Store.PushName = p.opts.PushName
 
+		// Installed before Connect: the first Connected event is worth
+		// reporting too, and a 401 on connect is a LoggedOut.
+		p.watchConnection(ctx, client)
+
 		if client.Store.ID == nil {
 			qrChan, err := client.GetQRChannel(ctx)
 			if err != nil {

@@ -36,6 +36,10 @@ type Options struct {
 	// Once a message has been received from a chat, that chat's own setting
 	// always wins over this value.
 	DisappearingTimer time.Duration
+	// ConnectionHandler observes the connection's life: connected,
+	// dropped, logged out. Nil means nobody is told — the historical
+	// behaviour, in which a lost session only shows at the next restart.
+	ConnectionHandler ConnectionHandler
 	// LogLevel is the verbosity of whatsmeow's own logger: "DEBUG", "INFO",
 	// "WARN" or "ERROR". Empty means "INFO".
 	//
@@ -101,6 +105,13 @@ func WithQRHandler(handler QRHandler) OptionFunc {
 // WithDisappearingTimer sets the lifetime marked on outgoing messages sent to
 // a chat whose own disappearing-messages setting has not been observed yet.
 // The zero value, which is the default, marks no expiry at all.
+// WithConnectionHandler installs the observer of the connection's life.
+func WithConnectionHandler(handler ConnectionHandler) OptionFunc {
+	return func(opts *Options) {
+		opts.ConnectionHandler = handler
+	}
+}
+
 func WithDisappearingTimer(timer time.Duration) OptionFunc {
 	return func(opts *Options) {
 		opts.DisappearingTimer = timer
