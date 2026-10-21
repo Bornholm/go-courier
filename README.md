@@ -6,7 +6,8 @@ A simple and unified interface to send and receive messages from/to common chat 
 
 | Package | Platform | Attachments | Channel kind | Mentions |
 |---|---|---|---|---|
-| `provider/whatsapp` | WhatsApp | yes, voice notes included | yes | yes |
+| `provider/whatsapp` | WhatsApp, as a linked device (whatsmeow) | yes, voice notes included | yes | yes |
+| `provider/whatsappcloud` | WhatsApp Business Platform (Cloud API) | yes, voice notes included | yes | yes, parsed from the text |
 | `provider/mail` | SMTP/IMAP | yes | yes | no |
 | `provider/rocket` | Rocket.Chat | yes | yes | yes |
 | `provider/discord` | Discord | yes | yes | yes |
@@ -166,6 +167,44 @@ curl -H 'Authorization: Bearer demo-token' \
      -F 'files=@note.ogg' \
      http://localhost:8080/channels/demo/messages
 ```
+
+## WhatsApp Cloud API provider
+
+`provider/whatsapp` links itself to an ordinary WhatsApp account by replaying
+the official client's protocol. It suits a personal setup; WhatsApp's terms
+forbid it and the number can be banned without notice. `provider/whatsappcloud`
+uses the official Cloud API instead, with a dedicated business number.
+
+Messages arrive through a signed webhook. The provider is an `http.Handler`:
+mount it at the URL declared in the Meta application.
+
+```go
+provider := whatsappcloud.NewProvider(
+  whatsappcloud.WithCredentials(accessToken, phoneNumberID),
+  whatsappcloud.WithWebhookSecrets(appSecret, verifyToken),
+)
+
+http.Handle("/webhooks/whatsapp", provider)
+```
+
+The rules differ from an ordinary account:
+
+- WhatsApp accepts free-form messages only from a business the user wrote to
+  in the last 24 hours. After that, only approved templates go through, and
+  each one is billed. With `WithReengage`, the provider holds the message back,
+  sends the template you choose, and delivers what it held back when the user
+  writes again. Without it, `Send` fails with `ErrWindowClosed`. The default
+  `WindowStore` keeps the window in memory. Supply your own to keep it across
+  restarts.
+- Users are identified by their business-scoped user ID (`FR.…`) when WhatsApp
+  sends one, and by their phone number otherwise. A user with a username can
+  hide their number.
+- Groups have at most 8 participants, and people join through an invite link.
+  Group channel identifiers start with `group:`. The Cloud API does not report
+  mentions, so the provider finds the `@<number>` tokens in the text.
+- The Cloud API accepts JPEG and PNG images, MP4 videos, the usual audio formats
+  and a short list of documents (PDF, Office, plain text). `Send` returns
+  `ErrUnsupportedMedia` for any other type.
 
 ## Testing
 
