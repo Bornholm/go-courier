@@ -14,6 +14,10 @@ import (
 type Provider struct {
 	opts *Options
 
+	// seen : read-only mode, last UID handed over per folder (WithIMAPReadOnly).
+	seenMutex sync.Mutex
+	seen      map[string]seenUID
+
 	releaseMutex sync.Mutex
 	release      []courier.CloseFunc
 }

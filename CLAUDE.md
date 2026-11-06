@@ -42,6 +42,8 @@ Interfaces message optionnelles :
 Le fournisseur WhatsApp expose `WithConnectionHandler` : un observateur du cycle de vie de la connexion (`ConnectionEvent{State, Permanent, Reason}`). `Permanent` vaut vrai quand whatsmeow ne se reconnectera PAS seul (appareil délié, flux remplacé, client obsolète, bannissement) — c'est à l'application de réagir, par un nouvel appairage typiquement. Sans gestionnaire, une session perdue est silencieuse jusqu'au redémarrage suivant.
 | `provider/signal` | Signal (daemon signal-cli, JSON-RPC) | oui, notes vocales incluses | oui | oui |
 | `provider/mail` | SMTP/IMAP | oui | oui | non |
+
+Le fournisseur mail relève par défaut les mails NON LUS et les marque lus en les lisant. `WithIMAPReadOnly(since)` le rend strictement en lecture seule, pour une boîte partagée : `EXAMINE`, `BODY.PEEK`, nouveaux mails repérés par UID (par dossier et `UIDVALIDITY`, en mémoire) quel que soit leur drapeau ; au démarrage, les mails reçus pendant `since` sont relus, c'est à l'application de dédoublonner (par Message-ID). Le certificat du serveur est vérifié ; `WithIMAPTLSConfig` fournit une autre configuration (autorité de test, ou `InsecureSkipVerify` explicite).
 | `provider/rocket` | Rocket.Chat (DDP + REST) | oui | oui | oui |
 | `provider/discord` | Discord | oui | oui | oui |
 | `provider/rest` | API REST JSON (multipart + SSE) | oui | configurable | oui |
