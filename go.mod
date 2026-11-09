@@ -29,7 +29,7 @@ require (
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/apex/log v1.9.0 // indirect
 	github.com/bwmarrin/discordgo v0.29.0
-	github.com/emersion/go-message v0.18.1 // indirect
+	github.com/emersion/go-message v0.18.1
 	github.com/emersion/go-sasl v0.0.0-20231106173351-e73c9f7bad43 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.0 // indirect

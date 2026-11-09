@@ -126,7 +126,7 @@ func (p *Provider) fetchEmailByMessageID(ctx context.Context, mailbox string, me
 				continue
 			}
 
-			parsed, err := parsemail.Parse(bodySection.Literal)
+			parsed, err := parseEmail(bodySection.Literal)
 			if err != nil {
 				return nil, errors.WithStack(err)
 			}
@@ -324,7 +324,7 @@ func (p *Provider) fetchNewEmails(ctx context.Context, folder string) (chan *par
 					continue
 				}
 
-				parsed, err := parsemail.Parse(bodySection.Literal)
+				parsed, err := parseEmail(bodySection.Literal)
 				if err != nil {
 					slog.ErrorContext(ctx, "could not parse email", slog.Any("error", errors.WithStack(err)))
 					continue
