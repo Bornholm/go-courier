@@ -10,6 +10,7 @@ import (
 	"github.com/DusanKasan/parsemail"
 	"github.com/emersion/go-message"
 	"github.com/emersion/go-message/charset"
+	gomail "github.com/emersion/go-message/mail"
 	"github.com/pkg/errors"
 )
 
@@ -36,6 +37,8 @@ func parseEmail(r io.Reader) (parsemail.Email, error) {
 	if entity == nil {
 		return email, errors.WithStack(err)
 	}
+
+	decodeHeader(&email, entity.Header)
 
 	var text, html []string
 
@@ -85,6 +88,21 @@ func parseEmail(r io.Reader) (parsemail.Email, error) {
 	email.HTMLBody = strings.Join(html, "\n")
 
 	return email, nil
+}
+
+// decodeHeader reads the subject and the sender again with go-message: parsemail
+// loses the space between a plain word and an encoded one ("Devis =?utf-8?q?h=C3=A9bergement?="
+// gives "Devishébergement"). A value that cannot be read keeps what parsemail found.
+func decodeHeader(email *parsemail.Email, header message.Header) {
+	h := gomail.Header{Header: header}
+
+	if subject, err := h.Subject(); err == nil && subject != "" {
+		email.Subject = subject
+	}
+
+	if from, err := h.AddressList("From"); err == nil && len(from) > 0 {
+		email.From = from
+	}
 }
 
 // headerOnly keeps the raw header, without its Content-Type so that parsemail

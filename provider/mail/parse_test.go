@@ -176,3 +176,30 @@ func TestFullTextPart(t *testing.T) {
 		t.Error("full text part without a text body")
 	}
 }
+
+// A plain word next to an encoded one keeps its space, in the subject and in the
+// name of the sender.
+func TestParseEmailMixedHeader(t *testing.T) {
+	for name, c := range map[string]struct{ from, subject, wantName, wantSubject string }{
+		"mixed":     {"Jean =?utf-8?q?Ren=C3=A9?= <jean@example.org>", "Tr: Devis =?utf-8?q?h=C3=A9bergement?=", "Jean René", "Tr: Devis hébergement"},
+		"two words": {"=?utf-8?q?Ren=C3=A9?= =?utf-8?q?Dupont?= <jean@example.org>", "=?utf-8?q?D=C3=A9j=C3=A0?= =?utf-8?q?vu?=", "RenéDupont", "Déjàvu"},
+		"latin1":    {"=?iso-8859-1?q?Ren=E9?= Dupont <jean@example.org>", "URGENT =?iso-8859-1?q?syst=E8me?= encore", "René Dupont", "URGENT système encore"},
+		"plain":     {"Jean Dupont <jean@example.org>", "Demande de devis", "Jean Dupont", "Demande de devis"},
+		"folded":    {"Jean Dupont <jean@example.org>", "Une demande\r\n =?utf-8?q?tr=C3=A8s?= longue", "Jean Dupont", "Une demande très longue"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw := "From: " + c.from + "\r\nSubject: " + c.subject + "\r\nMessage-ID: <id@example.org>\r\n" +
+				"Date: Tue, 27 Oct 2026 09:41:00 +0100\r\n\r\ntexte\r\n"
+			email, err := parseEmail(strings.NewReader(raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if email.Subject != c.wantSubject {
+				t.Errorf("subject: %q", email.Subject)
+			}
+			if len(email.From) != 1 || email.From[0].Name != c.wantName || email.From[0].Address != "jean@example.org" {
+				t.Errorf("from: %+v", email.From)
+			}
+		})
+	}
+}
