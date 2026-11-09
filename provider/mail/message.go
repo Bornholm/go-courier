@@ -9,6 +9,10 @@ import (
 	erp "github.com/web-ridge/email-reply-parser"
 )
 
+// FullTextPartName names the inline part holding the whole text of a received
+// email, quotations and forwarded content included.
+const FullTextPartName = "body.txt"
+
 // toMessage converts a parsed email.
 //
 // Attachment readers are backed by the IMAP fetch command and die with it, so
@@ -18,6 +22,17 @@ func (p *Provider) toMessage(email *parsemail.Email) courier.Message {
 		courier.WithMessageSentAt(email.Date),
 		// Quotations are stripped: the reply alone is what the sender wrote.
 		courier.WithMessageMainPart(erp.Parse(email.TextBody)),
+	}
+
+	// The main part drops what looks like a quotation, which also cuts forwarded
+	// emails: the whole text stays available next to it.
+	if email.TextBody != "" {
+		funcs = append(funcs, courier.WithMessagePart(courier.NewAttachment(
+			"", "text/plain", courier.OpenerFromString(email.TextBody),
+			courier.WithAttachmentName(FullTextPartName),
+			courier.WithAttachmentDisposition(courier.DispositionInline),
+			courier.WithAttachmentSize(int64(len(email.TextBody))),
+		)))
 	}
 
 	if email.HTMLBody != "" {

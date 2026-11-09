@@ -169,8 +169,8 @@ func TestToMessage(t *testing.T) {
 	}
 
 	attachments := courier.Attachments(message)
-	if len(attachments) != 2 {
-		t.Fatalf("len(courier.Attachments(message)): got %d, expected 2 (html body + pdf)", len(attachments))
+	if len(attachments) != 3 {
+		t.Fatalf("len(courier.Attachments(message)): got %d, expected 3 (full text + html body + pdf)", len(attachments))
 	}
 
 	var pdf courier.Attachment

@@ -1,10 +1,15 @@
 package mail
 
 import (
+	"context"
 	"encoding/base64"
 	"io"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/DusanKasan/parsemail"
+	"github.com/bornholm/go-courier"
 )
 
 const parseHeader = "From: =?UTF-8?Q?Ren=C3=A9?= <client@example.org>\r\nSubject: =?UTF-8?Q?D=C3=A9j=C3=A0?=\r\n" +
@@ -135,5 +140,39 @@ func TestParseEmailDamaged(t *testing.T) {
 			}
 			t.Logf("body: %q", email.TextBody)
 		})
+	}
+}
+
+// The main part is the reply alone; the full text keeps quotations and the
+// content of a forwarded email, which the reply parser cuts.
+func TestFullTextPart(t *testing.T) {
+	ctx := context.Background()
+	provider := NewProvider()
+	defer provider.releaseAll()
+
+	full := "Peux-tu regarder ?\n\n---------- Forwarded message ---------\nFrom: Client <c@example.org>\n" +
+		"Date: Mon, Nov 9, 2026\nSubject: Devis\nTo: Moi <m@example.org>\n\nIl nous faudrait un devis."
+	message := provider.toMessage(&parsemail.Email{MessageID: "id@example.org", TextBody: full})
+
+	var found string
+	for _, attachment := range courier.Attachments(message) {
+		if attachment.Name() == FullTextPartName {
+			content, err := courier.ReadPart(ctx, attachment)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found = string(content)
+			if attachment.Disposition() != courier.DispositionInline {
+				t.Errorf("disposition: %q", attachment.Disposition())
+			}
+		}
+	}
+	if found != full {
+		t.Errorf("full text: %q", found)
+	}
+
+	if empty := provider.toMessage(&parsemail.Email{MessageID: "id2@example.org", HTMLBody: "<p>x</p>"}); slices.ContainsFunc(
+		courier.Attachments(empty), func(a courier.Attachment) bool { return a.Name() == FullTextPartName }) {
+		t.Error("full text part without a text body")
 	}
 }

@@ -104,6 +104,11 @@ func attachParts(ctx context.Context, email *gomail.Message, message courier.Mes
 			continue
 		}
 
+		// The full text of a received email is not a file either.
+		if attachment.Name() == FullTextPartName && attachment.Disposition() == courier.DispositionInline {
+			continue
+		}
+
 		copyContent := func(part courier.MessagePart) gomail.FileSetting {
 			return gomail.SetCopyFunc(func(w io.Writer) error {
 				reader, err := part.Reader(ctx)
