@@ -481,7 +481,13 @@ func (p *Provider) Send(ctx context.Context, message courier.Message) (courier.M
 
 	var reply *replyParameters
 	if parent, ok := courier.InReplyTo(message); ok {
-		if id, err := parseMessageID(parent); err == nil {
+		id, err := parseMessageID(parent)
+		if err != nil {
+			// The message still goes, as a plain one: losing the reply link
+			// is better than losing the answer.
+			slog.WarnContext(ctx, "telegram: reply target is not a telegram message id, sending without reply",
+				slog.String("in_reply_to", string(parent)))
+		} else {
 			reply = &replyParameters{MessageID: id, AllowSendingWithoutReply: true}
 		}
 	}
@@ -809,7 +815,11 @@ func splitText(text string, limit int) []string {
 		text = text[cut:]
 	}
 
-	return append(chunks, text)
+	if text != "" {
+		chunks = append(chunks, text)
+	}
+
+	return chunks
 }
 
 // cutIndex returns the byte index where to cut text so that the head fits
@@ -827,7 +837,9 @@ func cutIndex(text string, limit int) int {
 		if size < 0 {
 			size = 1
 		}
-		if units+size > limit {
+		// The first rune always goes, even past the limit: a cut at zero
+		// would make splitText loop forever.
+		if units+size > limit && end > 0 {
 			break
 		}
 		units += size

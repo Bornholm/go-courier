@@ -735,4 +735,34 @@ func TestSplitText(t *testing.T) {
 			t.Errorf("chunk %q exceeds the limit", chunk)
 		}
 	}
+
+	// A limit below the size of a rune must still make progress.
+	if chunks := splitText("😀😀", 1); strings.Join(chunks, "") != "😀😀" || len(chunks) != 2 {
+		t.Errorf("splitText under a rune-sized limit = %q, expected one emoji per chunk", chunks)
+	}
+}
+
+func TestSendWithForeignReplyTarget(t *testing.T) {
+	api := newFakeBotAPI(t)
+	provider := newTestProvider(api)
+
+	message := courier.NewMessage(
+		courier.RandomMessageID(),
+		courier.NewChannelRef(courier.ChannelID(strconv.Itoa(testChatID))),
+		nil,
+		courier.WithMessageMainPart("hello"),
+		courier.WithMessageInReplyTo("not-a-telegram-id"),
+	)
+
+	if _, err := provider.Send(context.Background(), message); err != nil {
+		t.Fatalf("Send: %+v", err)
+	}
+
+	sent := api.sentMessages()
+	if len(sent) != 1 {
+		t.Fatalf("len(sent) = %d, expected the message to go anyway", len(sent))
+	}
+	if _, ok := sent[0].fields["reply_parameters"]; ok {
+		t.Error("reply_parameters set for an unparsable reply target")
+	}
 }
