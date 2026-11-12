@@ -44,6 +44,7 @@ Le fournisseur WhatsApp expose `WithConnectionHandler` : un observateur du cycle
 | `provider/mail` | SMTP/IMAP | oui | oui | non |
 | `provider/rocket` | Rocket.Chat (DDP + REST) | oui | oui | oui |
 | `provider/discord` | Discord | oui | oui | oui |
+| `provider/telegram` | Telegram (API Bot, long polling) | oui, notes vocales incluses | oui | le bot lui-même et les `text_mention` |
 | `provider/rest` | API REST JSON (multipart + SSE) | oui | configurable | oui |
 | `provider/memory` | en mémoire, pour les tests | oui | configurable | oui |
 
@@ -74,7 +75,7 @@ go vet ./...            # Vérification statique
 - Options fonctionnelles pour tous les providers : `NewProvider(WithX(...), WithY(...))`
 - Le contenu des pièces jointes est **lazy** : il n'est téléchargé qu'à la lecture de la part. C'est la raison d'être du `ctx` dans `Reader(ctx)`.
 - Les parts doivent être **rejouables** : deux lectures successives donnent le même contenu. Envelopper toute source à usage unique dans `courier.BufferedOpener`, dont la `CloseFunc` doit être enregistrée pour libérer le fichier temporaire éventuel.
-- Les exemples sont dans `examples/` (rest-echo, attachment-echo, discord-echo, whatsapp-echo)
+- Les exemples sont dans `examples/` (rest-echo, attachment-echo, discord-echo, telegram-echo, whatsapp-echo)
 
 ## Ajouter un nouveau provider
 
