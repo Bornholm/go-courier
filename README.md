@@ -11,6 +11,7 @@ A simple and unified interface to send and receive messages from/to common chat 
 | `provider/mail` | SMTP/IMAP | yes | yes | no |
 | `provider/rocket` | Rocket.Chat | yes | yes | yes |
 | `provider/discord` | Discord | yes | yes | yes |
+| `provider/telegram` | Telegram bots (Bot API, long polling) | yes, voice notes included | yes | the bot itself, and users named by `text_mention` |
 | `provider/rest` | JSON HTTP API | yes | configurable | yes |
 | `provider/memory` | in-process, for tests | yes | configurable | yes |
 
@@ -205,6 +206,33 @@ The rules differ from an ordinary account:
 - The Cloud API accepts JPEG and PNG images, MP4 videos, the usual audio formats
   and a short list of documents (PDF, Office, plain text). `Send` returns
   `ErrUnsupportedMedia` for any other type.
+
+## Telegram provider
+
+`provider/telegram` speaks as a bot created with @BotFather, through the Bot
+API. It polls for updates (`getUpdates`), so it needs no public endpoint, but
+the bot must have no webhook set and only one process may poll it at a time:
+Telegram answers a second poller with a 409 conflict.
+
+```go
+provider := telegram.NewProvider(telegram.WithToken(botToken))
+```
+
+- Channels are chats, identified by their numeric id. A topic of a forum
+  supergroup is a channel of its own, `<chat_id>/<topic_id>`, so that an answer
+  lands in the topic it answers. Messages are identified as
+  `<chat_id>:<message_id>`, Telegram numbering them per chat.
+- In groups, a bot with privacy mode on (the default) only receives commands,
+  replies to its own messages and messages mentioning it. Telegram gives no way
+  to resolve an `@username` into a user, so only mentions of the bot itself and
+  `text_mention` entities are reported.
+- Reactions are reported in private chats, and in groups where the bot is an
+  administrator. They flow while `Listen` runs.
+- Texts longer than 4096 characters are split into several messages. A file
+  goes with the method Telegram displays best (photo, voice note, audio,
+  video), and as a document otherwise. Bots cannot download files over 20MB.
+- The token is part of every Bot API URL: the provider strips URLs from the
+  transport errors it returns, so that logging an error never leaks it.
 
 ## Testing
 
