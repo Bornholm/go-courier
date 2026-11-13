@@ -2,6 +2,7 @@ package whatsapp
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/bornholm/go-courier"
@@ -17,8 +18,17 @@ import (
 type QRHandler func(ctx context.Context, code string, linked bool)
 
 type Options struct {
-	// DBPath is the SQLite file holding the WhatsApp session.
+	// DBPath is the SQLite file holding the WhatsApp session. It is ignored
+	// when DB is set.
 	DBPath string
+	// DB, when set, holds the WhatsApp session instead of the SQLite file at
+	// DBPath: typically the application's own PostgreSQL pool, so that the
+	// session needs no local file. The caller keeps ownership of the pool
+	// and closes it; whatsmeow creates its tables (all prefixed with
+	// whatsmeow_) on first use.
+	DB *sql.DB
+	// DBDialect is the dialect of DB: "postgres" or "sqlite3".
+	DBDialect string
 	// PushName is the display name advertised to contacts.
 	PushName string
 	// MaxInMemorySize is the size above which downloaded media is spilled to
@@ -69,6 +79,16 @@ func NewOptions(funcs ...OptionFunc) *Options {
 func WithDBPath(path string) OptionFunc {
 	return func(opts *Options) {
 		opts.DBPath = path
+	}
+}
+
+// WithDB stores the WhatsApp session in db, whose dialect is "postgres" or
+// "sqlite3", instead of the SQLite file of WithDBPath. The pool stays owned
+// by the caller: the provider never closes it.
+func WithDB(db *sql.DB, dialect string) OptionFunc {
+	return func(opts *Options) {
+		opts.DB = db
+		opts.DBDialect = dialect
 	}
 }
 

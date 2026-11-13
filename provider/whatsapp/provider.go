@@ -12,6 +12,7 @@ import (
 	"github.com/bornholm/go-courier/syncx"
 	"github.com/mdp/qrterminal"
 	"github.com/pkg/errors"
+	"go.mau.fi/util/dbutil"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
@@ -527,14 +528,38 @@ func (p *Provider) logLevel() string {
 	return p.opts.LogLevel
 }
 
+// openStore opens the session store: the caller's pool when WithDB was
+// given, the SQLite file at DBPath otherwise.
+func (p *Provider) openStore(ctx context.Context) (*sqlstore.Container, error) {
+	dbLog := waLog.Stdout("Database", p.logLevel(), true)
+
+	if p.opts.DB == nil {
+		container, err := sqlstore.New(ctx, "sqlite3", fmt.Sprintf("%s?_foreign_keys=on", p.opts.DBPath), dbLog)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		return container, nil
+	}
+
+	// sqlstore.NewWithDB panics on an unknown dialect: refuse it first.
+	if _, err := dbutil.ParseDialect(p.opts.DBDialect); err != nil {
+		return nil, errors.Wrap(err, "whatsapp session store")
+	}
+
+	container := sqlstore.NewWithDB(p.opts.DB, p.opts.DBDialect, dbLog)
+	if err := container.Upgrade(ctx); err != nil {
+		return nil, errors.Wrap(err, "could not upgrade the whatsapp session store")
+	}
+	return container, nil
+}
+
 func (p *Provider) getClient(ctx context.Context) (*whatsmeow.Client, error) {
 	p.initOnce.Do(func() {
 		slog.DebugContext(ctx, "initializing whatsapp client")
 
-		dbLog := waLog.Stdout("Database", p.logLevel(), true)
-		container, err := sqlstore.New(ctx, "sqlite3", fmt.Sprintf("%s?_foreign_keys=on", p.opts.DBPath), dbLog)
+		container, err := p.openStore(ctx)
 		if err != nil {
-			p.initErr = errors.WithStack(err)
+			p.initErr = err
 			return
 		}
 

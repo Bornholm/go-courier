@@ -24,6 +24,10 @@ included. Deciding whether to answer is up to the application.
 // Create an instance of your provider
 provider := whatsapp.NewProvider(whatsapp.WithDBPath("whatsapp.db"))
 
+// Or keep the WhatsApp session in the application's own database
+// (PostgreSQL or SQLite); the pool stays yours to close
+provider = whatsapp.NewProvider(whatsapp.WithDB(db, "postgres"))
+
 ctx, cancel := context.WithCancel(context.Background())
 defer cancel()
 
