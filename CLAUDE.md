@@ -39,7 +39,7 @@ Interfaces message optionnelles :
 |---------|-----------|---|---|---|
 | `provider/whatsapp` | WhatsApp (whatsmeow) | oui, notes vocales incluses | oui | oui |
 
-Le fournisseur WhatsApp expose `WithConnectionHandler` : un observateur du cycle de vie de la connexion (`ConnectionEvent{State, Permanent, Reason}`). `Permanent` vaut vrai quand whatsmeow ne se reconnectera PAS seul (appareil délié, flux remplacé, client obsolète, bannissement) — c'est à l'application de réagir, par un nouvel appairage typiquement. Sans gestionnaire, une session perdue est silencieuse jusqu'au redémarrage suivant.
+Le fournisseur WhatsApp garde sa session dans un fichier SQLite (`WithDBPath`) ou dans une base fournie par l'application (`WithDB(db, "postgres")`), dont le pool reste à l'appelant. Il expose aussi `WithConnectionHandler` : un observateur du cycle de vie de la connexion (`ConnectionEvent{State, Permanent, Reason}`). `Permanent` vaut vrai quand whatsmeow ne se reconnectera PAS seul (appareil délié, flux remplacé, client obsolète, bannissement) — c'est à l'application de réagir, par un nouvel appairage typiquement. Sans gestionnaire, une session perdue est silencieuse jusqu'au redémarrage suivant.
 | `provider/signal` | Signal (daemon signal-cli, JSON-RPC) | oui, notes vocales incluses | oui | oui |
 | `provider/mail` | SMTP/IMAP | oui | oui | non |
 | `provider/rocket` | Rocket.Chat (DDP + REST) | oui | oui | oui |
